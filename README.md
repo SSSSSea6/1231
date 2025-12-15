@@ -6,7 +6,7 @@
 pnpm install
 pnpm dev           # 开发模式
 pnpm build         # 构建
-pnpm start         # 运行已构建产物
+pnpm start         # 运行构建产物
 ```
 
 > 推荐 Node.js ≥ 18。
