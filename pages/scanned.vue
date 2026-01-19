@@ -24,6 +24,7 @@ const completedDates = ref<string[]>([]);
 const runRecords = ref<SunRunRecord[]>([]);
 const loadingRecords = ref(false);
 const recordMessage = ref('');
+const recordDialog = ref(false);
 const isSubmitting = ref(false);
 const statusMessage = ref('');
 const resultLog = ref('');
@@ -246,6 +247,13 @@ const randomSelect = () => {
 const selectDay = (iso: string, disabled: boolean) => {
   if (disabled || !iso) return;
   customDate.value = iso;
+};
+
+const openRecordDialog = async () => {
+  recordDialog.value = true;
+  if (!runRecords.value.length && !loadingRecords.value) {
+    await loadRunRecords();
+  }
 };
 
 const formatRecordDateTime = (record: SunRunRecord) => {
@@ -613,43 +621,12 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <VCard class="p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="text-h6">运动记录</div>
-        <VBtn variant="text" size="small" :loading="loadingRecords" @click="loadRunRecords">
-          刷新记录
-        </VBtn>
+    <div class="flex items-center gap-3">
+      <VBtn color="primary" variant="tonal" @click="openRecordDialog">查看记录</VBtn>
+      <div v-if="runRecords.length" class="text-caption text-gray-500">
+        已加载 {{ runRecords.length }} 条
       </div>
-      <div v-if="recordMessage" class="text-caption text-orange-600">
-        {{ recordMessage }}
-      </div>
-      <VTable density="compact">
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>里程</th>
-            <th>用时</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="!runRecords.length">
-            <td colspan="4" class="text-center text-gray-500">暂无记录</td>
-          </tr>
-          <tr v-for="record in runRecords" :key="record.scoreId">
-            <td>
-              <div class="whitespace-nowrap">{{ formatRecordDateTime(record) }}</div>
-              <div class="text-caption text-gray-500">
-                消耗 {{ record.consume || '-' }} 千卡
-              </div>
-            </td>
-            <td class="whitespace-nowrap">{{ record.mileage }} km</td>
-            <td class="whitespace-nowrap">{{ record.usedTime }}</td>
-            <td class="whitespace-nowrap">{{ formatRecordStatus(record) }}</td>
-          </tr>
-        </tbody>
-      </VTable>
-    </VCard>
+    </div>
 
     <div class="space-y-3">
       <VRadioGroup v-model="showBackfill" hide-details class="space-y-1">
@@ -741,6 +718,51 @@ onUnmounted(() => {
         />
       </div>
     </div>
+
+    <VDialog v-model="recordDialog" max-width="860">
+      <VCard title="运动记录">
+        <VCardText class="space-y-3">
+          <div v-if="recordMessage" class="text-caption text-orange-600">
+            {{ recordMessage }}
+          </div>
+          <div class="max-h-80 overflow-auto">
+            <VTable density="compact">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>里程</th>
+                  <th>用时</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!runRecords.length">
+                  <td colspan="4" class="text-center text-gray-500">暂无记录</td>
+                </tr>
+                <tr v-for="record in runRecords" :key="record.scoreId">
+                  <td>
+                    <div class="whitespace-nowrap">{{ formatRecordDateTime(record) }}</div>
+                    <div class="text-caption text-gray-500">
+                      消耗 {{ record.consume || '-' }} 千卡
+                    </div>
+                  </td>
+                  <td class="whitespace-nowrap">{{ record.mileage }} km</td>
+                  <td class="whitespace-nowrap">{{ record.usedTime }}</td>
+                  <td class="whitespace-nowrap">{{ formatRecordStatus(record) }}</td>
+                </tr>
+              </tbody>
+            </VTable>
+          </div>
+        </VCardText>
+        <VCardActions>
+          <VBtn variant="text" :loading="loadingRecords" @click="loadRunRecords">
+            刷新记录
+          </VBtn>
+          <VSpacer />
+          <VBtn variant="text" @click="recordDialog = false">关闭</VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
 
     <VDialog v-model="redeemDialog" max-width="420">
       <VCard title="充值次数">
