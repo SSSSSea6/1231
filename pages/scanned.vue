@@ -7,12 +7,10 @@ import normalizeSession from '~/src/utils/normalizeSession';
 
 const sunrunPaper = useSunRunPaper();
 const session = useSession();
-const route = useRoute();
 const hydratedSession = computed(() => normalizeSession(session.value || {}));
 
 const selectValue = ref('');
 const customDates = ref<string[]>([]);
-const customPeriod = ref<'AM' | 'PM'>('AM');
 const showBackfill = ref(false);
 const credits = ref(0);
 const loadingCredits = ref(false);
@@ -33,7 +31,9 @@ const realtimeChannel = ref<RealtimeChannel | null>(null);
 const queueCount = ref<number | null>(null);
 const estimatedWaitMs = ref<number | null>(null);
 const isQueueLoading = ref(false);
+const routeSelected = computed(() => Boolean(selectValue.value));
 const selectedDates = computed(() => Array.from(new Set(customDates.value)).sort());
+const pickRandomPeriod = (): 'AM' | 'PM' => (Math.random() < 0.5 ? 'AM' : 'PM');
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const target = computed(() =>
@@ -135,7 +135,8 @@ const calendarDays = computed(() => {
       cursor < start ||
       cursor > end ||
       iso >= todayStr.value ||
-      completed;
+      completed ||
+      !routeSelected.value;
     const selected = selectedDates.value.includes(iso);
     days.push({
       date: new Date(cursor),
@@ -247,7 +248,7 @@ const randomSelect = () => {
 };
 
 const selectDay = (iso: string, disabled: boolean) => {
-  if (disabled || !iso) return;
+  if (disabled || !iso || !routeSelected.value) return;
   const next = new Set(customDates.value);
   if (next.has(iso)) {
     next.delete(iso);
@@ -440,7 +441,11 @@ const loadRunRecords = async () => {
   }
 };
 
-const buildJobPayload = (targetDate: string | null, reservedCredit = false) => {
+const buildJobPayload = (
+  targetDate: string | null,
+  period: 'AM' | 'PM' | null,
+  reservedCredit = false,
+) => {
   if (!target.value) throw new Error('未选择路线');
   return {
     routeId: target.value.pointId,
@@ -450,7 +455,7 @@ const buildJobPayload = (targetDate: string | null, reservedCredit = false) => {
     maxTime: sunrunPaper.value?.maxTime,
     runPoint: target.value,
     customDate: showBackfill.value ? targetDate : null,
-    customPeriod: showBackfill.value ? customPeriod.value || null : null,
+    customPeriod: showBackfill.value ? period : null,
     startDate: sunrunPaper.value?.startDate || null,
     session: {
       campusId: session.value.campusId,
@@ -531,7 +536,8 @@ const submitJobToQueue = async () => {
 
   for (const date of availableDates) {
     try {
-      const jobPayload = buildJobPayload(date, reservedCredit);
+      const period = isBackfill ? pickRandomPeriod() : null;
+      const jobPayload = buildJobPayload(date, period, reservedCredit);
       const response = await fetch('/api/submitTask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -606,8 +612,7 @@ const init = async () => {
       stuNumber: session.value.stuNumber,
     });
     sunrunPaper.value = data;
-    const fromQuery = typeof route.query.route === 'string' ? route.query.route : '';
-    selectValue.value = fromQuery || data?.runPointList?.[0]?.pointId || '';
+    selectValue.value = '';
     await loadRunRecords();
     await fetchCredits();
   } catch (error) {
@@ -688,7 +693,7 @@ onUnmounted(() => {
     </div>
 
     <div class="space-y-3">
-      <VRadioGroup v-model="showBackfill" hide-details class="space-y-1">
+      <VRadioGroup v-model="showBackfill" hide-details class="space-y-1" :disabled="!routeSelected">
         <VRadio label="立即开跑" :value="false" />
         <VRadio label="选择日期（可多选，仅本学期）" :value="true" />
       </VRadioGroup>
@@ -717,8 +722,11 @@ onUnmounted(() => {
             >
           </div>
         </div>
-        <div class="text-caption text-gray-500 mb-2">
-          已选择 {{ selectedDates.length }} 天，将扣除 {{ selectedDates.length }} 次
+        <div
+          class="max-w-2xl rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-700 mb-2"
+        >
+          已选择 <span class="font-semibold text-red-600">{{ selectedDates.length }}</span> 天，将扣除
+          <span class="font-semibold text-red-600">{{ selectedDates.length }}</span> 次
         </div>
         <div class="text-sm text-gray-600 mb-2">当前月份：{{ monthLabel }}</div>
         <div class="flex items-center gap-4 text-caption text-gray-500 mb-2">
@@ -751,13 +759,15 @@ onUnmounted(() => {
               :class="[
                 day.completed
                   ? 'bg-emerald-100 text-emerald-700 cursor-not-allowed'
-                  : day.disabled
-                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                    : 'bg-white',
+                  : day.selected
+                    ? 'bg-orange-100 text-orange-700'
+                    : day.disabled
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-white',
                 day.completed
                   ? 'border-emerald-200'
                   : day.selected
-                    ? 'border-primary text-primary font-semibold'
+                    ? 'border-orange-300 font-semibold shadow-sm'
                     : 'border-gray-200',
               ]"
               :disabled="day.disabled || !day.iso"
@@ -767,17 +777,6 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
-        <VSelect
-          v-model="customPeriod"
-          :items="[
-            { title: '上午（07:30-11:30）', value: 'AM' },
-            { title: '下午（13:30-21:30）', value: 'PM' },
-          ]"
-          label="时间段"
-          variant="outlined"
-          density="comfortable"
-          class="max-w-80"
-        />
       </div>
     </div>
 
