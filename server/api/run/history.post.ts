@@ -1,4 +1,53 @@
+import type { SunRunRecord } from '~~/src/types/responseTypes/SunRunSportResponse';
 import TotoroApiWrapper from '~~/src/wrappers/TotoroApiWrapper';
+
+const buildRecordKey = (record: SunRunRecord) =>
+  record.scoreId || `${record.day || ''}-${record.runTime || ''}-${record.mileage || ''}`;
+
+const getRecordDay = (record: SunRunRecord) => {
+  if (record.day) return record.day;
+  if (!record.runTime) return '';
+  const day = record.runTime.split(' ')?.[0] || '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : '';
+};
+
+const getRecordDate = (record: SunRunRecord) => {
+  const day = getRecordDay(record);
+  if (!day) return null;
+  const time =
+    record.runTime && record.runTime.includes(' ')
+      ? record.runTime.split(' ')[1]
+      : record.runTime;
+  const safeTime = time && time.includes(':') ? time : '00:00:00';
+  const date = new Date(`${day}T${safeTime}+08:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return { day, date };
+};
+
+const fetchSunRunRecords = async (
+  monthId: string | undefined,
+  basicReq: { stuNumber: string; token: string },
+) => {
+  const records: SunRunRecord[] = [];
+  const pageSize = 10;
+  const maxPages = 20;
+  for (let page = 1; page <= maxPages; page += 1) {
+    const req: Record<string, string> = {
+      stuNumber: basicReq.stuNumber,
+      token: basicReq.token,
+      runType: '0',
+      pageNumber: String(page),
+      rowNumber: String(pageSize),
+    };
+    if (monthId) req.monthId = monthId;
+    const resp = await TotoroApiWrapper.getSunRunSport(req as any);
+    const list = Array.isArray(resp?.runList) ? resp.runList : [];
+    if (!list.length) break;
+    records.push(...list);
+    if (list.length < pageSize) break;
+  }
+  return records;
+};
 
 export default defineEventHandler(async (e) => {
   try {
@@ -26,35 +75,60 @@ export default defineEventHandler(async (e) => {
       token: body.session.token,
     };
 
-    // 获取学期和月列表，再按月查询 getSunrunArch（官方阳光跑记录）
     const doneDates = new Set<string>();
+    const recordMap = new Map<string, SunRunRecord>();
+
     const termResp = await TotoroApiWrapper.getSchoolTerm(basicReq);
     const terms = termResp?.data ?? [];
-    for (const term of terms) {
-      const termId = term.termId || term.id;
+    const currentTerm = terms.find((term) => term.isCurrent === '1');
+    const targetTerms = currentTerm ? [currentTerm] : terms;
+
+    if (!targetTerms.length) {
+      const fallbackRecords = await fetchSunRunRecords(undefined, basicReq);
+      fallbackRecords.forEach((record) => {
+        const parsed = getRecordDate(record);
+        if (!parsed) return;
+        if (parsed.date < start || parsed.date > end) return;
+        doneDates.add(parsed.day);
+        recordMap.set(buildRecordKey(record), record);
+      });
+    }
+
+    for (const term of targetTerms) {
+      const termId = term.termId || (term as any).id;
       if (!termId) continue;
       const monthResp = await TotoroApiWrapper.getSchoolMonthByTerm(termId, basicReq);
-      const months = monthResp?.data ?? [];
-      for (const m of months) {
-        const monthId = m.monthId || m.id || m.monthCode;
-        if (!monthId) continue;
+      const months = Array.isArray((monthResp as any)?.monthList)
+        ? (monthResp as any).monthList
+        : (monthResp as any)?.data ?? [];
+      const monthIds = months
+        .map((m: any) => m.monthId || m.id || m.monthCode)
+        .filter((id: string) => Boolean(id));
+      const targetMonthIds = monthIds.length ? monthIds : [''];
+
+      for (const monthId of targetMonthIds) {
         try {
-          const arch = await TotoroApiWrapper.getSunRunArch(monthId, termId, basicReq);
-          arch.data?.forEach((s) => {
-            const datePart = s.runTime?.split(' ')?.[0] || s.runTime;
-            if (!datePart) return;
-            const d = new Date(`${datePart}T00:00:00+08:00`);
-            if (d >= start && d <= end) {
-              doneDates.add(datePart);
-            }
+          const runList = await fetchSunRunRecords(monthId || undefined, basicReq);
+          runList.forEach((record) => {
+            const parsed = getRecordDate(record);
+            if (!parsed) return;
+            if (parsed.date < start || parsed.date > end) return;
+            doneDates.add(parsed.day);
+            recordMap.set(buildRecordKey(record), record);
           });
         } catch (err) {
-          console.warn('[history] arch fetch failed', monthId, (err as Error).message);
+          console.warn('[history] record fetch failed', monthId, (err as Error).message);
         }
       }
     }
 
-    return { dates: Array.from(doneDates) };
+    const records = Array.from(recordMap.values()).sort((a, b) => {
+      const ad = getRecordDate(a)?.date.getTime() ?? 0;
+      const bd = getRecordDate(b)?.date.getTime() ?? 0;
+      return bd - ad;
+    });
+
+    return { dates: Array.from(doneDates).sort(), records };
   } catch (err) {
     return { message: (err as Error).message };
   }

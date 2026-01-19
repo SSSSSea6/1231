@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { SunRunRecord } from '~/src/types/responseTypes/SunRunSportResponse';
 import { supabase, supabaseReady } from '~/src/services/supabaseClient';
 import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
 import normalizeSession from '~/src/utils/normalizeSession';
@@ -20,6 +21,9 @@ const redeemCode = ref('');
 const submitted = ref(false);
 const calendarMonthOffset = ref(0);
 const completedDates = ref<string[]>([]);
+const runRecords = ref<SunRunRecord[]>([]);
+const loadingRecords = ref(false);
+const recordMessage = ref('');
 const isSubmitting = ref(false);
 const statusMessage = ref('');
 const resultLog = ref('');
@@ -106,6 +110,7 @@ const calendarDays = computed(() => {
     iso: string;
     disabled: boolean;
     selected: boolean;
+    completed: boolean;
   }> = [];
   const monthStart = new Date(monthToRender.value);
   const firstWeekday = monthStart.getDay() || 7;
@@ -117,22 +122,25 @@ const calendarDays = computed(() => {
       iso: '',
       disabled: true,
       selected: false,
+      completed: false,
     });
   }
   const cursor = new Date(monthStart);
   while (cursor <= end) {
     const iso = formatDateOnly(cursor);
+    const completed = completedDates.value.includes(iso);
     const disabled =
       cursor < start ||
       cursor > end ||
       iso >= todayStr.value ||
-      completedDates.value.includes(iso);
+      completed;
     days.push({
       date: new Date(cursor),
       label: String(cursor.getDate()),
       iso,
       disabled,
-      selected: iso === customDate.value,
+      selected: iso === customDate.value && !completed,
+      completed,
     });
     cursor.setDate(cursor.getDate() + 1);
     if (cursor.getDate() === 1) break; // next month reached
@@ -238,6 +246,21 @@ const randomSelect = () => {
 const selectDay = (iso: string, disabled: boolean) => {
   if (disabled || !iso) return;
   customDate.value = iso;
+};
+
+const formatRecordDateTime = (record: SunRunRecord) => {
+  const day = record.day || record.runTime?.split(' ')?.[0] || '';
+  if (!day) return record.runTime || '-';
+  const time = record.runTime?.includes(' ')
+    ? record.runTime.split(' ')[1]
+    : record.runTime;
+  return time ? `${day} ${time}` : day;
+};
+
+const formatRecordStatus = (record: SunRunRecord) => {
+  if (record.status === '1') return '合格';
+  if (record.status === '0') return '不合格';
+  return record.status || '-';
 };
 
 const hasTaskOnDate = async (targetDate: string) => {
@@ -347,23 +370,55 @@ const refundReservedCredit = async () => {
   }
 };
 
-const loadCompletedDates = async () => {
-  if (!session.value?.token || !sunrunPaper.value?.startDate || !sunrunPaper.value?.endDate) return;
+const loadRunRecords = async () => {
+  const sessionPayload = hydratedSession.value || session.value;
+  if (
+    !sessionPayload?.token ||
+    !sessionPayload?.stuNumber ||
+    !sessionPayload?.schoolId ||
+    !sunrunPaper.value?.startDate ||
+    !sunrunPaper.value?.endDate
+  ) {
+    return;
+  }
+  loadingRecords.value = true;
+  recordMessage.value = '';
   try {
-    const response = await fetch('/api/run/history', {
+    const data = await $fetch<{
+      dates?: string[];
+      records?: SunRunRecord[];
+      message?: string;
+    }>('/api/run/history', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session: { stuNumber: session.value.stuNumber, token: session.value.token },
+      body: {
+        session: {
+          stuNumber: sessionPayload.stuNumber,
+          token: sessionPayload.token,
+          schoolId: sessionPayload.schoolId,
+          campusId: sessionPayload.campusId,
+        },
         startDate: sunrunPaper.value.startDate,
         endDate: sunrunPaper.value.endDate,
-      }),
+      },
     });
-    const data = await response.json();
-    completedDates.value = Array.isArray(data?.dates) ? data.dates : [];
+    runRecords.value = Array.isArray(data?.records) ? data.records : [];
+    const dates = Array.isArray(data?.dates)
+      ? data.dates
+      : runRecords.value
+          .map((record) => record.day || record.runTime?.split(' ')?.[0] || '')
+          .filter((day) => day);
+    completedDates.value = dates;
+    if (customDate.value && completedDates.value.includes(customDate.value)) {
+      customDate.value = '';
+    }
+    if (data?.message) recordMessage.value = data.message;
   } catch (error) {
     console.warn('[history] load failed', error);
+    runRecords.value = [];
     completedDates.value = [];
+    recordMessage.value = '运动记录获取失败';
+  } finally {
+    loadingRecords.value = false;
   }
 };
 
@@ -492,7 +547,7 @@ const init = async () => {
     sunrunPaper.value = data;
     const fromQuery = typeof route.query.route === 'string' ? route.query.route : '';
     selectValue.value = fromQuery || data?.runPointList?.[0]?.pointId || '';
-    await loadCompletedDates();
+    await loadRunRecords();
     await fetchCredits();
   } catch (error) {
     statusMessage.value = '获取路线失败';
@@ -558,6 +613,44 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <VCard class="p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="text-h6">运动记录</div>
+        <VBtn variant="text" size="small" :loading="loadingRecords" @click="loadRunRecords">
+          刷新记录
+        </VBtn>
+      </div>
+      <div v-if="recordMessage" class="text-caption text-orange-600">
+        {{ recordMessage }}
+      </div>
+      <VTable density="compact">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>里程</th>
+            <th>用时</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="!runRecords.length">
+            <td colspan="4" class="text-center text-gray-500">暂无记录</td>
+          </tr>
+          <tr v-for="record in runRecords" :key="record.scoreId">
+            <td>
+              <div class="whitespace-nowrap">{{ formatRecordDateTime(record) }}</div>
+              <div class="text-caption text-gray-500">
+                消耗 {{ record.consume || '-' }} 千卡
+              </div>
+            </td>
+            <td class="whitespace-nowrap">{{ record.mileage }} km</td>
+            <td class="whitespace-nowrap">{{ record.usedTime }}</td>
+            <td class="whitespace-nowrap">{{ formatRecordStatus(record) }}</td>
+          </tr>
+        </tbody>
+      </VTable>
+    </VCard>
+
     <div class="space-y-3">
       <VRadioGroup v-model="showBackfill" hide-details class="space-y-1">
         <VRadio label="立即开跑" :value="false" />
@@ -589,6 +682,18 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="text-sm text-gray-600 mb-2">当前月份：{{ monthLabel }}</div>
+        <div class="flex items-center gap-4 text-caption text-gray-500 mb-2">
+          <div class="flex items-center gap-1">
+            <span
+              class="inline-block h-3 w-3 rounded bg-emerald-100 border border-emerald-200"
+            ></span>
+            已跑过
+          </div>
+          <div class="flex items-center gap-1">
+            <span class="inline-block h-3 w-3 rounded bg-gray-200 border border-gray-200"></span>
+            不可选
+          </div>
+        </div>
         <div class="max-w-2xl border rounded-md p-3">
           <div class="grid grid-cols-7 text-center text-caption text-gray-500 mb-2">
             <div>一</div>
@@ -605,8 +710,16 @@ onUnmounted(() => {
               :key="day.iso + day.label"
               class="h-10 rounded text-sm border flex items-center justify-center"
               :class="[
-                day.disabled ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white',
-                day.selected ? 'border-primary text-primary font-semibold' : 'border-gray-200',
+                day.completed
+                  ? 'bg-emerald-100 text-emerald-700 cursor-not-allowed'
+                  : day.disabled
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-white',
+                day.completed
+                  ? 'border-emerald-200'
+                  : day.selected
+                    ? 'border-primary text-primary font-semibold'
+                    : 'border-gray-200',
               ]"
               :disabled="day.disabled || !day.iso"
               @click="selectDay(day.iso, day.disabled)"
