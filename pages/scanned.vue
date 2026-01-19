@@ -11,7 +11,7 @@ const route = useRoute();
 const hydratedSession = computed(() => normalizeSession(session.value || {}));
 
 const selectValue = ref('');
-const customDate = ref('');
+const customDates = ref<string[]>([]);
 const customPeriod = ref<'AM' | 'PM'>('AM');
 const showBackfill = ref(false);
 const credits = ref(0);
@@ -33,6 +33,7 @@ const realtimeChannel = ref<RealtimeChannel | null>(null);
 const queueCount = ref<number | null>(null);
 const estimatedWaitMs = ref<number | null>(null);
 const isQueueLoading = ref(false);
+const selectedDates = computed(() => Array.from(new Set(customDates.value)).sort());
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const target = computed(() =>
@@ -135,12 +136,13 @@ const calendarDays = computed(() => {
       cursor > end ||
       iso >= todayStr.value ||
       completed;
+    const selected = selectedDates.value.includes(iso);
     days.push({
       date: new Date(cursor),
       label: String(cursor.getDate()),
       iso,
       disabled,
-      selected: iso === customDate.value && !completed,
+      selected: selected && !completed,
       completed,
     });
     cursor.setDate(cursor.getDate() + 1);
@@ -214,7 +216,7 @@ const handleStatusUpdate = (task: { status: string; result_log?: string }) => {
     return;
   }
   if (task.status === 'SUCCESS') {
-    statusMessage.value = '🎉 任务执行成功';
+    statusMessage.value = '任务执行成功';
     cleanupRealtime();
     return;
   }
@@ -246,7 +248,13 @@ const randomSelect = () => {
 
 const selectDay = (iso: string, disabled: boolean) => {
   if (disabled || !iso) return;
-  customDate.value = iso;
+  const next = new Set(customDates.value);
+  if (next.has(iso)) {
+    next.delete(iso);
+  } else {
+    next.add(iso);
+  }
+  customDates.value = Array.from(next).sort();
 };
 
 const openRecordDialog = async () => {
@@ -337,7 +345,9 @@ const handleRedeem = async () => {
   }
 };
 
-const reserveBackfillCredit = async (): Promise<{ ok: boolean; message?: string }> => {
+const reserveBackfillCredit = async (
+  count = 1,
+): Promise<{ ok: boolean; message?: string }> => {
   if (!session.value?.stuNumber) {
     return { ok: false, message: '请先登录' };
   }
@@ -346,7 +356,7 @@ const reserveBackfillCredit = async (): Promise<{ ok: boolean; message?: string 
       '/api/backfill/credits',
       {
         method: 'POST',
-        body: { action: 'consume', userId: session.value.stuNumber },
+        body: { action: 'consume', userId: session.value.stuNumber, count },
       },
     );
     if (res.success && typeof res.credits === 'number') {
@@ -360,14 +370,14 @@ const reserveBackfillCredit = async (): Promise<{ ok: boolean; message?: string 
   }
 };
 
-const refundReservedCredit = async () => {
+const refundReservedCredit = async (count = 1) => {
   if (!session.value?.stuNumber) return;
   try {
     const res = await $fetch<{ success?: boolean; credits?: number; message?: string }>(
       '/api/backfill/credits',
       {
         method: 'POST',
-        body: { action: 'refund', userId: session.value.stuNumber },
+        body: { action: 'refund', userId: session.value.stuNumber, count },
       },
     );
     if (typeof res.credits === 'number') {
@@ -416,8 +426,8 @@ const loadRunRecords = async () => {
           .map((record) => record.day || record.runTime?.split(' ')?.[0] || '')
           .filter((day) => day);
     completedDates.value = dates;
-    if (customDate.value && completedDates.value.includes(customDate.value)) {
-      customDate.value = '';
+    if (customDates.value.length) {
+      customDates.value = customDates.value.filter((date) => !completedDates.value.includes(date));
     }
     if (data?.message) recordMessage.value = data.message;
   } catch (error) {
@@ -430,7 +440,7 @@ const loadRunRecords = async () => {
   }
 };
 
-const buildJobPayload = (reservedCredit = false) => {
+const buildJobPayload = (targetDate: string | null, reservedCredit = false) => {
   if (!target.value) throw new Error('未选择路线');
   return {
     routeId: target.value.pointId,
@@ -439,7 +449,7 @@ const buildJobPayload = (reservedCredit = false) => {
     minTime: sunrunPaper.value?.minTime,
     maxTime: sunrunPaper.value?.maxTime,
     runPoint: target.value,
-    customDate: showBackfill.value ? customDate.value || null : null,
+    customDate: showBackfill.value ? targetDate : null,
     customPeriod: showBackfill.value ? customPeriod.value || null : null,
     startDate: sunrunPaper.value?.startDate || null,
     session: {
@@ -450,6 +460,7 @@ const buildJobPayload = (reservedCredit = false) => {
       phoneNumber: session.value.phoneNumber,
     },
     reservedCredit,
+    reservedCreditCount: reservedCredit ? 1 : 0,
     queuedAt: new Date().toISOString(),
   };
 };
@@ -468,30 +479,45 @@ const submitJobToQueue = async () => {
   resultLog.value = '';
   taskId.value = null;
   submitted.value = false;
+  cleanupRealtime();
 
-  const targetDate = showBackfill.value && customDate.value ? customDate.value : getShanghaiDateStr();
-  let reservedCredit = false;
-  let reserveNeedsRefund = false;
-
-  try {
-    const duplicated = await hasTaskOnDate(targetDate);
-    if (duplicated) {
-      statusMessage.value = '这一天已经跑过了，请勿重复提交';
-      isSubmitting.value = false;
-      submitted.value = false;
-      return;
-    }
-  } catch (dupErr) {
-    console.warn('[queue] duplicate check unexpected failure', dupErr);
+  const isBackfill = showBackfill.value;
+  const requestedDates = isBackfill ? selectedDates.value : [getShanghaiDateStr()];
+  if (isBackfill && requestedDates.length === 0) {
+    statusMessage.value = '请选择至少一个日期';
     isSubmitting.value = false;
     return;
   }
 
-  if (showBackfill.value && customDate.value && session.value?.stuNumber) {
-    const reserveResult = await reserveBackfillCredit();
+  const availableDates: string[] = [];
+  const duplicatedDates: string[] = [];
+  try {
+    for (const date of requestedDates) {
+      const duplicated = await hasTaskOnDate(date);
+      if (duplicated) duplicatedDates.push(date);
+      else availableDates.push(date);
+    }
+  } catch (dupErr) {
+    console.warn('[queue] duplicate check unexpected failure', dupErr);
+    statusMessage.value = '重复日期校验失败，请稍后重试';
+    isSubmitting.value = false;
+    return;
+  }
+
+  if (!availableDates.length) {
+    statusMessage.value = '所选日期已存在记录或排队任务';
+    isSubmitting.value = false;
+    return;
+  }
+
+  let reservedCredit = false;
+  let reserveNeedsRefund = false;
+
+  if (isBackfill && session.value?.stuNumber) {
+    const reserveResult = await reserveBackfillCredit(availableDates.length);
     if (!reserveResult.ok) {
       statusMessage.value = reserveResult.message || '补跑次数不足';
-       isSubmitting.value = false;
+      isSubmitting.value = false;
       return;
     }
     reservedCredit = true;
@@ -500,43 +526,70 @@ const submitJobToQueue = async () => {
 
   statusMessage.value = '正在提交到队列...';
 
-  try {
-    const jobPayload = buildJobPayload(reservedCredit);
-    const response = await fetch('/api/submitTask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(jobPayload),
-    });
-    const data = await response.json();
+  const successTaskIds: number[] = [];
+  const failedDates: string[] = [];
 
-    if (response.status === 202 && data.success) {
-      taskId.value = data.taskId;
-      statusMessage.value = '';
-      handleStatusUpdate({ status: 'PENDING', result_log: '' });
-      subscribeToTaskUpdates(data.taskId);
-      if (queueCount.value !== null) queueCount.value = Math.max(0, queueCount.value - 1);
-      submitted.value = true;
-    } else {
-      statusMessage.value = `提交失败: ${data.error || '未知错误'}`;
-      if (reserveNeedsRefund) {
-        await refundReservedCredit();
-        reserveNeedsRefund = false;
+  for (const date of availableDates) {
+    try {
+      const jobPayload = buildJobPayload(date, reservedCredit);
+      const response = await fetch('/api/submitTask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(jobPayload),
+      });
+      const data = await response.json();
+      if (response.status === 202 && data.success) {
+        successTaskIds.push(data.taskId);
+      } else {
+        failedDates.push(date);
       }
-      submitted.value = false;
+    } catch (error) {
+      resultLog.value = (error as Error).message;
+      failedDates.push(date);
     }
-  } catch (error) {
-    statusMessage.value = '提交失败';
-    resultLog.value = (error as Error).message;
-    submitted.value = false;
-    if (reserveNeedsRefund) {
-      await refundReservedCredit();
-      reserveNeedsRefund = false;
-    }
-  } finally {
-    isSubmitting.value = false;
-    if (reservedCredit) {
-      await fetchCredits();
-    }
+  }
+
+  if (reserveNeedsRefund && failedDates.length > 0) {
+    await refundReservedCredit(failedDates.length);
+  }
+
+  const successCount = successTaskIds.length;
+  const failCount = failedDates.length;
+  const skippedCount = duplicatedDates.length;
+
+  if (successCount === 1) {
+    taskId.value = successTaskIds[0];
+    handleStatusUpdate({ status: 'PENDING', result_log: '' });
+    subscribeToTaskUpdates(successTaskIds[0]);
+  } else {
+    cleanupRealtime();
+  }
+
+  if (queueCount.value !== null && successCount > 0) {
+    queueCount.value = Math.max(0, queueCount.value - successCount);
+  }
+
+  let summary = '';
+  if (successCount > 0 && failCount > 0) {
+    summary = `已提交 ${successCount} 条，${failCount} 条提交失败`;
+  } else if (successCount > 1) {
+    summary = `已提交 ${successCount} 条任务`;
+  } else if (successCount === 0) {
+    summary = '提交失败';
+  }
+
+  if (skippedCount > 0) {
+    summary = summary
+      ? `${summary}，已跳过 ${skippedCount} 条已存在记录/队列的日期`
+      : `已跳过 ${skippedCount} 条已存在记录/队列的日期`;
+  }
+
+  statusMessage.value = summary;
+
+  submitted.value = successCount > 0;
+  isSubmitting.value = false;
+  if (reservedCredit) {
+    await fetchCredits();
   }
 };
 
@@ -622,7 +675,13 @@ onUnmounted(() => {
     </div>
 
     <div class="flex items-center gap-3">
-      <VBtn color="primary" variant="tonal" @click="openRecordDialog">查看记录</VBtn>
+      <VBtn
+        variant="tonal"
+        class="bg-violet-100 text-violet-700 hover:bg-violet-200"
+        @click="openRecordDialog"
+      >
+        查看记录
+      </VBtn>
       <div v-if="runRecords.length" class="text-caption text-gray-500">
         已加载 {{ runRecords.length }} 条
       </div>
@@ -631,7 +690,7 @@ onUnmounted(() => {
     <div class="space-y-3">
       <VRadioGroup v-model="showBackfill" hide-details class="space-y-1">
         <VRadio label="立即开跑" :value="false" />
-        <VRadio label="选择日期（仅本学期）" :value="true" />
+        <VRadio label="选择日期（可多选，仅本学期）" :value="true" />
       </VRadioGroup>
       <div v-if="showBackfill" class="space-y-3">
         <VCard class="p-3 space-y-2" variant="tonal">
@@ -648,7 +707,7 @@ onUnmounted(() => {
           </div>
         </VCard>
         <div class="flex items-center justify-between max-w-2xl">
-          <div class="font-medium">选择日期（仅本学期）</div>
+          <div class="font-medium">选择日期（可多选，仅本学期）</div>
           <div class="space-x-2">
             <VBtn size="small" variant="text" :disabled="prevDisabled" @click="calendarMonthOffset--"
               >上一月</VBtn
@@ -657,6 +716,9 @@ onUnmounted(() => {
               >下一月</VBtn
             >
           </div>
+        </div>
+        <div class="text-caption text-gray-500 mb-2">
+          已选择 {{ selectedDates.length }} 天，将扣除 {{ selectedDates.length }} 次
         </div>
         <div class="text-sm text-gray-600 mb-2">当前月份：{{ monthLabel }}</div>
         <div class="flex items-center gap-4 text-caption text-gray-500 mb-2">
@@ -834,7 +896,7 @@ onUnmounted(() => {
       block
       color="primary"
       size="large"
-      :disabled="!target || isSubmitting"
+      :disabled="!target || isSubmitting || (showBackfill && selectedDates.length === 0)"
       :loading="isSubmitting"
       @click="submitJobToQueue"
     >
@@ -849,7 +911,7 @@ onUnmounted(() => {
       任务已提交，可直接离开，稍后查看进度
     </VAlert>
 
-    <VAlert v-if="statusMessage && !submitted" type="info" variant="tonal" class="mt-2">
+    <VAlert v-if="statusMessage" type="info" variant="tonal" class="mt-2">
       <div>{{ statusMessage }}</div>
       <div v-if="resultLog" class="text-caption mt-1">详情：{{ resultLog }}</div>
     </VAlert>

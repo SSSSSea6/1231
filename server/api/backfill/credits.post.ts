@@ -8,7 +8,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const body = await readBody(event);
-  const { action, userId, code } = body || {};
+  const { action, userId, code, count } = body || {};
 
   if (!userId) {
     return { success: false, message: '缺少 userId' };
@@ -64,6 +64,11 @@ export default defineEventHandler(async (event) => {
   }
 
   if (action === 'consume') {
+    const amount = Number(count ?? 1);
+    if (!Number.isFinite(amount) || amount < 1) {
+      return { success: false, message: '扣减次数不合法' };
+    }
+    const consumeCount = Math.floor(amount);
     let { data, error } = await supabase
       .from('backfill_run_credits')
       .select('credits')
@@ -83,11 +88,11 @@ export default defineEventHandler(async (event) => {
     }
 
     const currentCredits = data?.credits ?? 0;
-    if (currentCredits < 1) {
+    if (currentCredits < consumeCount) {
       return { success: false, message: '补跑次数不足' };
     }
 
-    const nextCredits = currentCredits - 1;
+    const nextCredits = currentCredits - consumeCount;
     const { error: updateError } = await supabase
       .from('backfill_run_credits')
       .update({ credits: nextCredits, updated_at: new Date().toISOString() })
@@ -101,6 +106,11 @@ export default defineEventHandler(async (event) => {
   }
 
   if (action === 'refund') {
+    const amount = Number(count ?? 1);
+    if (!Number.isFinite(amount) || amount < 1) {
+      return { success: false, message: '返还次数不合法' };
+    }
+    const refundCount = Math.floor(amount);
     const { data, error } = await supabase
       .from('backfill_run_credits')
       .select('credits')
@@ -112,7 +122,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const currentCredits = data?.credits ?? 0;
-    const nextCredits = currentCredits + 1;
+    const nextCredits = currentCredits + refundCount;
     const { error: upsertError } = await supabase
       .from('backfill_run_credits')
       .upsert({
