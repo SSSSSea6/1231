@@ -46,6 +46,41 @@ const formatDateOnly = (date: Date) => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
+const parseSemesterDate = (raw: string | undefined, endOfDay = false): Date | null => {
+  if (!raw) return null;
+  const text = String(raw).trim().replace(/\//g, '-');
+  if (!text) return null;
+
+  const ymdMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymdMatch) {
+    const year = Number(ymdMatch[1]);
+    const month = Number(ymdMatch[2]);
+    const day = Number(ymdMatch[3]);
+    const hour = endOfDay ? 23 : 0;
+    const minute = endOfDay ? 59 : 0;
+    const second = endOfDay ? 59 : 0;
+    return new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second));
+  }
+
+  const ymdHmMatch = text.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/,
+  );
+  if (ymdHmMatch) {
+    const year = Number(ymdHmMatch[1]);
+    const month = Number(ymdHmMatch[2]);
+    const day = Number(ymdHmMatch[3]);
+    const hour = Number(ymdHmMatch[4]);
+    const minute = Number(ymdHmMatch[5]);
+    const second = Number(ymdHmMatch[6] || '0');
+    return new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second));
+  }
+
+  const normalized = /([zZ]|[+-]\d{2}:?\d{2})$/.test(text)
+    ? text.replace(' ', 'T')
+    : `${text.replace(' ', 'T')}+08:00`;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
 const getShanghaiDateStr = () => {
   const now = new Date();
   const offsetMs = (8 * 60 + now.getTimezoneOffset()) * 60 * 1000;
@@ -53,24 +88,23 @@ const getShanghaiDateStr = () => {
   return formatDateOnly(shanghaiNow);
 };
 const customDateMin = computed(() => {
-  const start = sunrunPaper.value?.startDate;
+  const start = parseSemesterDate(sunrunPaper.value?.startDate, false);
   if (!start) return '';
-  return formatDateOnly(new Date(`${start}T00:00`));
+  return formatDateOnly(start);
 });
 const customDateMax = computed(() => getShanghaiDateStr());
 const todayStr = computed(() => getShanghaiDateStr());
 const startDateObj = computed(() => {
-  const s = sunrunPaper.value?.startDate;
-  return s ? new Date(`${s}T00:00:00+08:00`) : null;
+  return parseSemesterDate(sunrunPaper.value?.startDate, false);
 });
 const endDateObj = computed(() => {
-  const e = sunrunPaper.value?.endDate;
-  return e ? new Date(`${e}T23:59:59+08:00`) : null;
+  return parseSemesterDate(sunrunPaper.value?.endDate, true);
 });
 const submitBlockedBySemester = computed(() => {
+  const hasSemesterRange = Boolean(sunrunPaper.value?.startDate && sunrunPaper.value?.endDate);
   const start = startDateObj.value;
   const end = endDateObj.value;
-  if (!start || !end) return false;
+  if (!start || !end) return hasSemesterRange;
   const now = new Date();
   if (now < start) return true;
   const graceEnd = new Date(end.getTime());
