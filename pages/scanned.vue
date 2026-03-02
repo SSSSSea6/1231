@@ -8,6 +8,8 @@ import normalizeSession from '~/src/utils/normalizeSession';
 const sunrunPaper = useSunRunPaper();
 const session = useSession();
 const hydratedSession = computed(() => normalizeSession(session.value || {}));
+const SEMESTER_END_GRACE_DAYS = 5;
+const SEMESTER_BLOCK_MESSAGE = '本学期已结束或新学期未开始，请等待新学期开始后再跑步';
 
 const selectValue = ref('');
 const customDates = ref<string[]>([]);
@@ -64,6 +66,16 @@ const startDateObj = computed(() => {
 const endDateObj = computed(() => {
   const e = sunrunPaper.value?.endDate;
   return e ? new Date(`${e}T23:59:59+08:00`) : null;
+});
+const submitBlockedBySemester = computed(() => {
+  const start = startDateObj.value;
+  const end = endDateObj.value;
+  if (!start || !end) return false;
+  const now = new Date();
+  if (now < start) return true;
+  const graceEnd = new Date(end.getTime());
+  graceEnd.setDate(graceEnd.getDate() + SEMESTER_END_GRACE_DAYS);
+  return now > graceEnd;
 });
 const startMonthFloor = computed(() => {
   if (!startDateObj.value) return null;
@@ -471,6 +483,12 @@ const buildJobPayload = (
 };
 
 const submitJobToQueue = async () => {
+  if (submitBlockedBySemester.value) {
+    statusMessage.value = SEMESTER_BLOCK_MESSAGE;
+    resultLog.value = '';
+    submitted.value = false;
+    return;
+  }
   if (!supabaseEnabled.value) {
     statusMessage.value = '队列未配置，无法提交';
     return;
