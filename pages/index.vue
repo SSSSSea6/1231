@@ -286,8 +286,9 @@ const goMornSign = () => {
     <VDialog v-model="schoolNoticeDialog" max-width="520">
       <VCard title="提示">
         <VCardText class="leading-7">
-          <span>非南航同学你好，由于使用人数较多，南航同学使用体验不能保证，以后要使用请转向</span>
+          <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，外校同学请转向</span>
           <span class="font-bold text-orange-600">nuaaguide.icu</span>
+          <span>以继续使用</span>
         </VCardText>
         <VCardActions>
           <VSpacer />
