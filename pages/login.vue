@@ -17,13 +17,13 @@ const schoolNoticeDialog = ref(false);
 const pendingRedirect = ref<string | null>(null);
 const session = useSession();
 const NUAA_NAME = '南京航空航天大学';
-const NUAA_ALLOWED_CAMPUSES = ['将军路校区', '天目湖校区', '明故宫校区'];
+const NUAA_ALLOWED_CAMPUS_KEYWORDS = ['将军路', '天目湖', '明故宫'];
 
 const shouldShowOtherSchoolNotice = (payload: Record<string, any>) => {
   const schoolName = String(payload?.schoolName ?? '').trim();
   const campusName = String(payload?.campusName ?? '').trim();
   const isNuaaBySchool = schoolName.includes(NUAA_NAME);
-  const isNuaaByCampus = NUAA_ALLOWED_CAMPUSES.some((campus) => campusName.includes(campus));
+  const isNuaaByCampus = NUAA_ALLOWED_CAMPUS_KEYWORDS.some((keyword) => campusName.includes(keyword));
   return !(isNuaaBySchool || isNuaaByCampus);
 };
 
@@ -176,7 +176,7 @@ const closeSchoolNoticeAndContinue = async () => {
     <VDialog v-model="schoolNoticeDialog" max-width="520" persistent>
       <VCard title="提示">
         <VCardText class="leading-7">
-          <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，以后要使用请转向</span>
+          <span>非南航同学你好，由于使用人数较多，南航同学使用体验不能保证，以后要使用请转向</span>
           <span class="font-bold text-orange-600">nuaaguide.icu</span>
         </VCardText>
         <VCardActions>
