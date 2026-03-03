@@ -78,7 +78,7 @@ const syncPendingMorningTasks = async (userId: string, token: string) => {
 };
 
 const handleScanned = async () => {
-  if (isLoading.value || isLoggedIn.value) return;
+  if (isLoading.value || isLoggedIn.value || schoolNoticeDialog.value) return;
   message.value = '';
   snackbar.value = false;
 
@@ -116,6 +116,11 @@ const handleScanned = async () => {
       token: lesseeServer.token,
       code: scanRes.code,
     });
+    if (shouldShowOtherSchoolNotice(normalized as Record<string, any>)) {
+      session.value = {};
+      schoolNoticeDialog.value = true;
+      return;
+    }
     session.value = normalized as any;
     await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
 
@@ -126,9 +131,6 @@ const handleScanned = async () => {
       stuNumber: personalInfo.stuNumber,
     };
     runPostLoginPrefetch(breq);
-    if (shouldShowOtherSchoolNotice(normalized as Record<string, any>)) {
-      schoolNoticeDialog.value = true;
-    }
 
     message.value = '登录成功，可选择入口';
     snackbar.value = true;

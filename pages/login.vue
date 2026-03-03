@@ -14,7 +14,6 @@ const message = ref('');
 const snackbar = ref(false);
 const isLoading = ref(false);
 const schoolNoticeDialog = ref(false);
-const pendingRedirect = ref<string | null>(null);
 const session = useSession();
 const NUAA_NAME = '南京航空航天大学';
 const NUAA_ALLOWED_CAMPUS_KEYWORDS = ['将军路', '天目湖', '明故宫'];
@@ -103,6 +102,11 @@ const handleScanned = async () => {
 
     const personalInfo = await TotoroApiWrapper.login({ token: lesseeServer.token });
     const normalized = normalizeSession({ ...personalInfo, token: lesseeServer.token, code: scanRes.code });
+    if (shouldShowOtherSchoolNotice(normalized as Record<string, any>)) {
+      session.value = {};
+      schoolNoticeDialog.value = true;
+      return;
+    }
     session.value = normalized as any;
     await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
 
@@ -114,11 +118,6 @@ const handleScanned = async () => {
     };
 
     runPostLoginPrefetch(breq);
-    if (shouldShowOtherSchoolNotice(normalized as Record<string, any>)) {
-      pendingRedirect.value = redirect.value;
-      schoolNoticeDialog.value = true;
-      return;
-    }
     await router.push(redirect.value);
   } catch (error) {
     console.error('[totoro-login] handleScanned failed', error);
@@ -139,13 +138,8 @@ const handleScanned = async () => {
   }
 };
 
-const closeSchoolNoticeAndContinue = async () => {
+const closeSchoolNotice = () => {
   schoolNoticeDialog.value = false;
-  const next = pendingRedirect.value;
-  pendingRedirect.value = null;
-  if (next) {
-    await router.push(next);
-  }
 };
 </script>
 <template>
@@ -181,7 +175,7 @@ const closeSchoolNoticeAndContinue = async () => {
         </VCardText>
         <VCardActions>
           <VSpacer />
-          <VBtn color="primary" @click="closeSchoolNoticeAndContinue">我知道了</VBtn>
+          <VBtn color="primary" @click="closeSchoolNotice">我知道了</VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
