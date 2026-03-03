@@ -173,6 +173,11 @@ const closeSchoolNotice = () => {
           <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，外校同学请转向</span>
           <span class="font-bold text-orange-600">nuaaguide.icu</span>
           <span>以继续使用</span>
+          <div class="mt-2">
+            <span>具体请咨询QQ </span>
+            <span class="font-bold text-orange-600">1538213150</span>
+            <span>（沐缘）</span>
+          </div>
         </VCardText>
         <VCardActions>
           <VSpacer />
