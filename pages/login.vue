@@ -13,7 +13,18 @@ const { data, refresh, pending } = await useFetch<{ uuid: string; imgUrl: string
 const message = ref('');
 const snackbar = ref(false);
 const isLoading = ref(false);
+const schoolNoticeDialog = ref(false);
+const pendingRedirect = ref<string | null>(null);
 const session = useSession();
+const NUAA_NAME = '南京航空航天大学';
+const NUAA_ALLOWED_CAMPUSES = ['将军路校区', '天目湖校区', '明故宫校区'];
+
+const shouldShowOtherSchoolNotice = (payload: Record<string, any>) => {
+  const schoolName = String(payload?.schoolName ?? '').trim();
+  const campusName = String(payload?.campusName ?? '').trim();
+  if (!schoolName.includes(NUAA_NAME)) return true;
+  return !NUAA_ALLOWED_CAMPUSES.some((campus) => campusName.includes(campus));
+};
 
 const isKyHttpError = (error: unknown): error is HTTPError =>
   !!error &&
@@ -102,6 +113,11 @@ const handleScanned = async () => {
     };
 
     runPostLoginPrefetch(breq);
+    if (shouldShowOtherSchoolNotice(normalized as Record<string, any>)) {
+      pendingRedirect.value = redirect.value;
+      schoolNoticeDialog.value = true;
+      return;
+    }
     await router.push(redirect.value);
   } catch (error) {
     console.error('[totoro-login] handleScanned failed', error);
@@ -119,6 +135,15 @@ const handleScanned = async () => {
     snackbar.value = true;
   } finally {
     isLoading.value = false;
+  }
+};
+
+const closeSchoolNoticeAndContinue = async () => {
+  schoolNoticeDialog.value = false;
+  const next = pendingRedirect.value;
+  pendingRedirect.value = null;
+  if (next) {
+    await router.push(next);
   }
 };
 </script>
@@ -147,6 +172,18 @@ const handleScanned = async () => {
     <div class="text-caption text-gray-500">
       登录成功后将自动跳转到 {{ redirect }}
     </div>
+    <VDialog v-model="schoolNoticeDialog" max-width="520" persistent>
+      <VCard title="提示">
+        <VCardText class="leading-7">
+          <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，以后要使用请转向</span>
+          <span class="font-bold text-orange-600">nuaaguide.icu</span>
+        </VCardText>
+        <VCardActions>
+          <VSpacer />
+          <VBtn color="primary" @click="closeSchoolNoticeAndContinue">我知道了</VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
     <VSnackbar v-model="snackbar" :timeout="3000">
       {{ message }}
     </VSnackbar>

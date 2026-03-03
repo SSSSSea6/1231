@@ -12,6 +12,7 @@ const message = ref('');
 const snackbar = ref(false);
 const welcomeSnackbar = ref(true);
 const isLoading = ref(false);
+const schoolNoticeDialog = ref(false);
 const session = useSession();
 const mornSignNotice = '早操签到功能仍不完善，所有已购买的已退款';
 const MORNSIGN_PASSWORD = '982108244Qq';
@@ -29,6 +30,15 @@ const polling = ref(false);
 const pollTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const router = useRouter();
 const poemLines = useState('home-poem', () => poem[Math.floor(Math.random() * poem.length)]);
+const NUAA_NAME = '南京航空航天大学';
+const NUAA_ALLOWED_CAMPUSES = ['将军路校区', '天目湖校区', '明故宫校区'];
+
+const shouldShowOtherSchoolNotice = (payload: Record<string, any>) => {
+  const schoolName = String(payload?.schoolName ?? '').trim();
+  const campusName = String(payload?.campusName ?? '').trim();
+  if (!schoolName.includes(NUAA_NAME)) return true;
+  return !NUAA_ALLOWED_CAMPUSES.some((campus) => campusName.includes(campus));
+};
 
 const isKyHttpError = (error: unknown): error is HTTPError =>
   !!error &&
@@ -115,6 +125,9 @@ const handleScanned = async () => {
       stuNumber: personalInfo.stuNumber,
     };
     runPostLoginPrefetch(breq);
+    if (shouldShowOtherSchoolNotice(normalized as Record<string, any>)) {
+      schoolNoticeDialog.value = true;
+    }
 
     message.value = '登录成功，可选择入口';
     snackbar.value = true;
@@ -267,6 +280,18 @@ const goMornSign = () => {
     <div class="mt-4 text-center text-gray-700 font-bold text-xl whitespace-pre-line">
       {{ poemLines?.join('\n') }}
     </div>
+    <VDialog v-model="schoolNoticeDialog" max-width="520">
+      <VCard title="提示">
+        <VCardText class="leading-7">
+          <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，以后要使用请转向</span>
+          <span class="font-bold text-orange-600">nuaaguide.icu</span>
+        </VCardText>
+        <VCardActions>
+          <VSpacer />
+          <VBtn color="primary" @click="schoolNoticeDialog = false">我知道了</VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
     <VSnackbar v-model="snackbar" :timeout="3000">
       {{ message }}
     </VSnackbar>
