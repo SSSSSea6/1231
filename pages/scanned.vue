@@ -36,6 +36,11 @@ const isQueueLoading = ref(false);
 const routeSelected = computed(() => Boolean(selectValue.value));
 const selectedDates = computed(() => Array.from(new Set(customDates.value)).sort());
 const pickRandomPeriod = (): 'AM' | 'PM' => (Math.random() < 0.5 ? 'AM' : 'PM');
+type TaskRealtimeRow = {
+  status: string;
+  result_log?: string | null;
+  user_data?: Record<string, any> | null;
+};
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const target = computed(() =>
@@ -255,7 +260,33 @@ const refreshQueueEstimate = async () => {
   }
 };
 
-const handleStatusUpdate = (task: { status: string; result_log?: string }) => {
+const getReservedCreditCount = (userData?: Record<string, any> | null) => {
+  const raw = userData?.reservedCreditCount ?? userData?.creditCount ?? 1;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.floor(parsed);
+};
+
+const getBackfillCreditState = (userData?: Record<string, any> | null) => {
+  const runMode = userData?.runMode;
+  const creditType = userData?.creditType;
+  const reserved = Boolean(
+    userData?.reservedCredit || userData?.creditReserved || userData?.creditConsumed,
+  );
+  const explicitNormal = runMode === 'normal';
+  const explicitBackfill = runMode === 'backfill' || creditType === 'backfill_run';
+  const legacyBackfill =
+    !explicitNormal && reserved && Boolean(userData?.customDate || userData?.customPeriod);
+  return {
+    isBackfill: explicitBackfill || legacyBackfill,
+    reserved,
+    refunded: Boolean(userData?.creditRefunded),
+    pending: Boolean(userData?.creditRefundPending),
+    creditCount: getReservedCreditCount(userData),
+  };
+};
+
+const handleStatusUpdate = (task: TaskRealtimeRow) => {
   if (!task) return;
   resultLog.value = task.result_log ?? '';
   if (task.status === 'PROCESSING') {
@@ -265,10 +296,23 @@ const handleStatusUpdate = (task: { status: string; result_log?: string }) => {
   if (task.status === 'SUCCESS') {
     statusMessage.value = '任务执行成功';
     cleanupRealtime();
+    void loadRunRecords();
+    void fetchCredits();
     return;
   }
   if (task.status === 'FAILED') {
-    statusMessage.value = '任务执行失败';
+    const creditState = getBackfillCreditState(task.user_data);
+    if (creditState.isBackfill && creditState.refunded) {
+      statusMessage.value = `任务执行失败，已返还 ${creditState.creditCount} 次补跑次数`;
+      void fetchCredits();
+    } else if (creditState.isBackfill && creditState.reserved) {
+      statusMessage.value = creditState.pending
+        ? '任务执行失败，补跑次数返还处理中'
+        : '任务执行失败，请刷新补跑次数余额确认返还结果';
+      void fetchCredits();
+    } else {
+      statusMessage.value = '任务执行失败';
+    }
     cleanupRealtime();
   }
 };
@@ -510,8 +554,12 @@ const buildJobPayload = (
       token: session.value.token,
       phoneNumber: session.value.phoneNumber,
     },
+    runMode: showBackfill.value ? 'backfill' : 'normal',
+    creditType: showBackfill.value ? 'backfill_run' : null,
     reservedCredit,
     reservedCreditCount: reservedCredit ? 1 : 0,
+    creditRefunded: false,
+    creditRefundPending: false,
     queuedAt: new Date().toISOString(),
   };
 };
@@ -752,7 +800,7 @@ onUnmounted(() => {
       <div v-if="showBackfill" class="space-y-3">
         <VCard class="p-3 space-y-2" variant="tonal">
           <div class="flex items-center gap-3">
-            <div class="font-medium">次数余额：</div>
+            <div class="font-medium">补跑次数余额：</div>
             <div class="text-2xl font-bold text-green-600">{{ credits }}</div>
             <VBtn size="small" variant="text" :loading="loadingCredits" @click="fetchCredits"
               >刷新</VBtn
@@ -760,7 +808,7 @@ onUnmounted(() => {
             <VBtn size="small" color="primary" @click="redeemDialog = true">添加次数</VBtn>
           </div>
           <div class="text-caption text-orange-700">
-            选择补跑后提交将预扣 1 次（任务失败会返还）
+            选择补跑后提交将预扣 1 次，任务失败后会返还到这里
           </div>
         </VCard>
         <div class="flex items-center justify-between max-w-2xl">

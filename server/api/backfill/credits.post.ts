@@ -1,6 +1,8 @@
 import { getSupabaseAdminClient, isSupabaseConfigured } from '../../utils/supabaseAdminClient';
 
 const INITIAL_BONUS = 1; // 新用户首次查询自动赠送 1 次
+const CREDIT_OP_RETRY_LIMIT = 6;
+const CREDIT_TABLE = 'backfill_run_credits';
 
 export default defineEventHandler(async (event) => {
   if (!isSupabaseConfigured()) {
@@ -15,52 +17,161 @@ export default defineEventHandler(async (event) => {
   }
 
   const supabase = getSupabaseAdminClient();
-  const ensureInitialRow = async () => {
-    const { data: inserted, error: upsertError } = await supabase
-      .from('backfill_run_credits')
-      .upsert({
+
+  const readCreditsRow = async () => {
+    const { data, error } = await supabase
+      .from(CREDIT_TABLE)
+      .select('credits')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      return { data: null as { credits: number } | null, error };
+    }
+
+    return {
+      data: data ? { credits: Number(data.credits ?? 0) } : null,
+      error: null,
+    };
+  };
+
+  const insertCreditsRow = async (credits: number) => {
+    const { data, error } = await supabase
+      .from(CREDIT_TABLE)
+      .insert({
         user_id: userId,
-        credits: INITIAL_BONUS,
+        credits,
         updated_at: new Date().toISOString(),
       })
       .select('credits')
-      .single();
-    if (upsertError) {
-      return { error: upsertError, credits: 0 };
+      .maybeSingle();
+
+    if (error && error.code !== '23505') {
+      return { data: null as { credits: number } | null, error };
     }
-    return { error: null, credits: inserted?.credits ?? INITIAL_BONUS };
+
+    return {
+      data: data ? { credits: Number(data.credits ?? credits) } : null,
+      error,
+    };
+  };
+
+  const updateCreditsRow = async (currentCredits: number, nextCredits: number) => {
+    const { data, error } = await supabase
+      .from(CREDIT_TABLE)
+      .update({
+        credits: nextCredits,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .eq('credits', currentCredits)
+      .select('credits')
+      .maybeSingle();
+
+    if (error) {
+      return { data: null as { credits: number } | null, error };
+    }
+
+    return {
+      data: data ? { credits: Number(data.credits ?? nextCredits) } : null,
+      error: null,
+    };
+  };
+
+  const getOrCreateCredits = async (initialCredits: number) => {
+    for (let attempt = 0; attempt < CREDIT_OP_RETRY_LIMIT; attempt += 1) {
+      const { data, error } = await readCreditsRow();
+      if (error) return { credits: null as number | null, error };
+      if (data) return { credits: data.credits, error: null };
+
+      const inserted = await insertCreditsRow(initialCredits);
+      if (!inserted.error && inserted.data) {
+        return { credits: inserted.data.credits, error: null };
+      }
+      if (inserted.error?.code === '23505') continue;
+      if (inserted.error) return { credits: null as number | null, error: inserted.error };
+    }
+
+    return {
+      credits: null as number | null,
+      error: new Error('补跑次数更新冲突，请稍后重试'),
+    };
+  };
+
+  const consumeCredits = async (consumeCount: number) => {
+    for (let attempt = 0; attempt < CREDIT_OP_RETRY_LIMIT; attempt += 1) {
+      let currentCredits: number;
+      const current = await readCreditsRow();
+      if (current.error) return { credits: null as number | null, error: current.error };
+
+      if (!current.data) {
+        const created = await insertCreditsRow(INITIAL_BONUS);
+        if (!created.error && created.data) {
+          currentCredits = created.data.credits;
+        } else if (created.error?.code === '23505') {
+          continue;
+        } else {
+          return {
+            credits: null as number | null,
+            error: created.error ?? new Error('初始化补跑次数失败'),
+          };
+        }
+      } else {
+        currentCredits = current.data.credits;
+      }
+
+      if (currentCredits < consumeCount) {
+        return { credits: null as number | null, error: null, message: '补跑次数不足' };
+      }
+
+      const updated = await updateCreditsRow(currentCredits, currentCredits - consumeCount);
+      if (!updated.error && updated.data) {
+        return { credits: updated.data.credits, error: null };
+      }
+    }
+
+    return {
+      credits: null as number | null,
+      error: new Error('补跑次数更新冲突，请稍后重试'),
+    };
+  };
+
+  const addCredits = async (creditDelta: number, initialCreditsOnCreate: number) => {
+    for (let attempt = 0; attempt < CREDIT_OP_RETRY_LIMIT; attempt += 1) {
+      const current = await readCreditsRow();
+      if (current.error) return { credits: null as number | null, error: current.error };
+
+      if (!current.data) {
+        const created = await insertCreditsRow(initialCreditsOnCreate);
+        if (!created.error && created.data) {
+          return { credits: created.data.credits, error: null };
+        }
+        if (created.error?.code === '23505') continue;
+        return {
+          credits: null as number | null,
+          error: created.error ?? new Error('初始化补跑次数失败'),
+        };
+      }
+
+      const currentCredits = current.data.credits;
+      const updated = await updateCreditsRow(currentCredits, currentCredits + creditDelta);
+      if (!updated.error && updated.data) {
+        return { credits: updated.data.credits, error: null };
+      }
+    }
+
+    return {
+      credits: null as number | null,
+      error: new Error('补跑次数更新冲突，请稍后重试'),
+    };
   };
 
   if (action === 'get') {
-    const { data, error } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') {
+    const { credits, error } = await getOrCreateCredits(INITIAL_BONUS);
+    if (error) {
       return { success: false, message: error.message };
     }
-
-    if (error?.code === 'PGRST116' || !data) {
-      const { data: inserted, error: upsertError } = await supabase
-        .from('backfill_run_credits')
-        .upsert({
-          user_id: userId,
-          credits: INITIAL_BONUS,
-          updated_at: new Date().toISOString(),
-        })
-        .select('credits')
-        .single();
-
-      if (upsertError) {
-        return { success: false, message: upsertError.message };
-      }
-
-      return { success: true, credits: inserted?.credits ?? INITIAL_BONUS };
-    }
-
-    return { success: true, credits: data?.credits ?? 0 };
+    return { success: true, credits: credits ?? INITIAL_BONUS };
   }
 
   if (action === 'consume') {
@@ -68,41 +179,15 @@ export default defineEventHandler(async (event) => {
     if (!Number.isFinite(amount) || amount < 1) {
       return { success: false, message: '扣减次数不合法' };
     }
-    const consumeCount = Math.floor(amount);
-    let { data, error } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
 
-    if (error && error.code !== 'PGRST116') {
-      return { success: false, message: error.message };
+    const consumed = await consumeCredits(Math.floor(amount));
+    if (consumed.message) {
+      return { success: false, message: consumed.message };
     }
-
-    if (error?.code === 'PGRST116' || !data) {
-      const init = await ensureInitialRow();
-      if (init.error) {
-        return { success: false, message: init.error.message };
-      }
-      data = { credits: init.credits };
+    if (consumed.error) {
+      return { success: false, message: consumed.error.message };
     }
-
-    const currentCredits = data?.credits ?? 0;
-    if (currentCredits < consumeCount) {
-      return { success: false, message: '补跑次数不足' };
-    }
-
-    const nextCredits = currentCredits - consumeCount;
-    const { error: updateError } = await supabase
-      .from('backfill_run_credits')
-      .update({ credits: nextCredits, updated_at: new Date().toISOString() })
-      .eq('user_id', userId);
-
-    if (updateError) {
-      return { success: false, message: updateError.message };
-    }
-
-    return { success: true, credits: nextCredits };
+    return { success: true, credits: consumed.credits ?? 0 };
   }
 
   if (action === 'refund') {
@@ -110,32 +195,12 @@ export default defineEventHandler(async (event) => {
     if (!Number.isFinite(amount) || amount < 1) {
       return { success: false, message: '返还次数不合法' };
     }
-    const refundCount = Math.floor(amount);
-    const { data, error } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
 
-    if (error && error.code !== 'PGRST116') {
-      return { success: false, message: error.message };
+    const refunded = await addCredits(Math.floor(amount), Math.floor(amount));
+    if (refunded.error) {
+      return { success: false, message: refunded.error.message };
     }
-
-    const currentCredits = data?.credits ?? 0;
-    const nextCredits = currentCredits + refundCount;
-    const { error: upsertError } = await supabase
-      .from('backfill_run_credits')
-      .upsert({
-        user_id: userId,
-        credits: nextCredits,
-        updated_at: new Date().toISOString(),
-      });
-
-    if (upsertError) {
-      return { success: false, message: upsertError.message };
-    }
-
-    return { success: true, credits: nextCredits };
+    return { success: true, credits: refunded.credits ?? Math.floor(amount) };
   }
 
   if (action === 'redeem') {
@@ -163,28 +228,17 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: '兑换失败，请重试' };
     }
 
-    const { data: userData, error: userError } = await supabase
-      .from('backfill_run_credits')
-      .select('credits')
-      .eq('user_id', userId)
-      .single();
-
-    if (userError && userError.code !== 'PGRST116') {
-      return { success: false, message: userError.message };
-    }
-
-    const currentCredits = userData?.credits ?? INITIAL_BONUS;
-    const newCredits = currentCredits + (codeData.amount ?? 1);
-
-    const { error: upsertError } = await supabase
-      .from('backfill_run_credits')
-      .upsert({ user_id: userId, credits: newCredits, updated_at: new Date().toISOString() });
-
-    if (upsertError) {
+    const amount = Number(codeData.amount ?? 1);
+    const redeemed = await addCredits(amount, INITIAL_BONUS + amount);
+    if (redeemed.error) {
       return { success: false, message: '兑换失败，请稍后重试' };
     }
 
-    return { success: true, message: `成功兑换 ${codeData.amount ?? 1} 次`, credits: newCredits };
+    return {
+      success: true,
+      message: `成功兑换 ${amount} 次`,
+      credits: redeemed.credits ?? INITIAL_BONUS + amount,
+    };
   }
 
   return { success: false, message: '未知操作' };
