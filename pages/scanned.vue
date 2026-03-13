@@ -41,12 +41,18 @@ type TaskRealtimeRow = {
   result_log?: string | null;
   user_data?: Record<string, any> | null;
 };
+type TaskDateRow = {
+  id: number;
+  created_at?: string | null;
+  user_data?: Record<string, any> | null;
+};
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const target = computed(() =>
   sunrunPaper.value?.runPointList?.find((r: any) => r.pointId === selectValue.value),
 );
 const routeList = computed(() => sunrunPaper.value?.runPointList || []);
+const completedDateSet = computed(() => new Set(completedDates.value));
 const formatDateOnly = (date: Date) => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -370,27 +376,50 @@ const formatRecordStatus = (record: SunRunRecord) => {
   return record.status || '-';
 };
 
-const hasTaskOnDate = async (targetDate: string) => {
+const toShanghaiDateStr = (input: string | null | undefined) => {
+  if (!input) return '';
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return '';
+  const offsetMs = (8 * 60 + date.getTimezoneOffset()) * 60 * 1000;
+  const shanghaiDate = new Date(date.getTime() + offsetMs);
+  return formatDateOnly(shanghaiDate);
+};
+
+const resolveTaskTargetDate = (task: TaskDateRow) => {
+  const userData = task.user_data || {};
+  const targetDate =
+    typeof userData.targetDate === 'string' ? userData.targetDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return targetDate;
+
+  const customDate =
+    typeof userData.customDate === 'string' ? userData.customDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(customDate)) return customDate;
+
+  return toShanghaiDateStr(task.created_at);
+};
+
+const hasOfficialRecordOnDate = (targetDate: string) => completedDateSet.value.has(targetDate);
+
+const hasQueuedTaskOnDate = async (targetDate: string) => {
   if (!supabaseEnabled.value || !supabase) return false;
   if (!session.value?.stuNumber) return false;
-  const dayStart = `${targetDate}T00:00:00+08:00`;
-  const dayEnd = `${targetDate}T23:59:59.999+08:00`;
   const query = supabase
     .from('Tasks')
-    .select('id', { count: 'exact' })
+    .select('id, user_data, created_at')
     .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-    .contains('user_data', { session: { stuNumber: session.value.stuNumber } })
-    .or(
-      `user_data->>customDate.eq.${targetDate},and(created_at.gte.${new Date(dayStart).toISOString()},created_at.lte.${new Date(dayEnd).toISOString()})`,
-    )
-    .limit(1);
+    .contains('user_data', { session: { stuNumber: session.value.stuNumber } });
 
   const { data, error } = await query;
   if (error) {
     console.warn('[queue] duplicate check failed', error);
     return false;
   }
-  return Array.isArray(data) && data.length > 0;
+  return Array.isArray(data) && data.some((task) => resolveTaskTargetDate(task as TaskDateRow) === targetDate);
+};
+
+const hasTaskOnDate = async (targetDate: string) => {
+  if (hasOfficialRecordOnDate(targetDate)) return true;
+  return hasQueuedTaskOnDate(targetDate);
 };
 
 const fetchCredits = async () => {
@@ -546,6 +575,7 @@ const buildJobPayload = (
     runPoint: target.value,
     customDate: showBackfill.value ? targetDate : null,
     customPeriod: showBackfill.value ? period : null,
+    targetDate,
     startDate: sunrunPaper.value?.startDate || null,
     session: {
       campusId: session.value.campusId,
