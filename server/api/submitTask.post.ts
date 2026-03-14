@@ -1,5 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
 import { fetchSunRunHistory } from '../utils/sunrunHistory';
+import { getSupabaseAdminClient, isSupabaseConfigured } from '../utils/supabaseAdminClient';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -58,8 +58,7 @@ export default defineEventHandler(async (event) => {
       });
     }
 
-    const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    if (!isSupabaseConfigured()) {
       return new Response(JSON.stringify({ success: false, error: '缺少 Supabase 环境变量' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
@@ -117,7 +116,7 @@ export default defineEventHandler(async (event) => {
       );
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    const supabase = getSupabaseAdminClient();
     const { data: duplicateTasks, error: duplicateError } = await supabase
       .from('Tasks')
       .select('id, user_data, created_at')

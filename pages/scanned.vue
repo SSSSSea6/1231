@@ -663,6 +663,7 @@ const submitJobToQueue = async () => {
 
   const successTaskIds: number[] = [];
   const failedDates: string[] = [];
+  const failedReasons: string[] = [];
 
   for (const date of availableDates) {
     try {
@@ -678,10 +679,22 @@ const submitJobToQueue = async () => {
         successTaskIds.push(data.taskId);
       } else {
         failedDates.push(date);
+        const reason =
+          typeof data?.error === 'string'
+            ? data.error
+            : typeof data?.message === 'string'
+              ? data.message
+              : '';
+        if (reason) {
+          failedReasons.push(availableDates.length > 1 ? `${date}: ${reason}` : reason);
+        }
       }
     } catch (error) {
       resultLog.value = (error as Error).message;
       failedDates.push(date);
+      failedReasons.push(
+        availableDates.length > 1 ? `${date}: ${(error as Error).message}` : (error as Error).message,
+      );
     }
   }
 
@@ -711,7 +724,8 @@ const submitJobToQueue = async () => {
   } else if (successCount > 1) {
     summary = `已提交 ${successCount} 条任务`;
   } else if (successCount === 0) {
-    summary = '提交失败';
+    const uniqueReasons = Array.from(new Set(failedReasons.filter(Boolean)));
+    summary = uniqueReasons.length === 1 ? `提交失败：${uniqueReasons[0]}` : '提交失败';
   }
 
   if (skippedCount > 0) {
@@ -721,6 +735,10 @@ const submitJobToQueue = async () => {
   }
 
   statusMessage.value = summary;
+  if (failedReasons.length > 0) {
+    const uniqueReasons = Array.from(new Set(failedReasons.filter(Boolean)));
+    resultLog.value = uniqueReasons.join('\n');
+  }
 
   submitted.value = successCount > 0;
   isSubmitting.value = false;
