@@ -43,7 +43,6 @@ type TaskRealtimeRow = {
 };
 type TaskDateRow = {
   id: number;
-  created_at?: string | null;
   user_data?: Record<string, any> | null;
 };
 
@@ -395,7 +394,15 @@ const resolveTaskTargetDate = (task: TaskDateRow) => {
     typeof userData.customDate === 'string' ? userData.customDate.trim() : '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(customDate)) return customDate;
 
-  return toShanghaiDateStr(task.created_at);
+  const queuedAt =
+    typeof userData.queuedAt === 'string'
+      ? userData.queuedAt.trim()
+      : typeof userData.queueAt === 'string'
+        ? userData.queueAt.trim()
+        : typeof userData.submittedAt === 'string'
+          ? userData.submittedAt.trim()
+          : '';
+  return toShanghaiDateStr(queuedAt);
 };
 
 const hasOfficialRecordOnDate = (targetDate: string) => completedDateSet.value.has(targetDate);
@@ -405,7 +412,7 @@ const hasQueuedTaskOnDate = async (targetDate: string) => {
   if (!session.value?.stuNumber) return false;
   const query = supabase
     .from('Tasks')
-    .select('id, user_data, created_at')
+    .select('id, user_data')
     .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
     .contains('user_data', { session: { stuNumber: session.value.stuNumber } });
 
