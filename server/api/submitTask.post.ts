@@ -6,6 +6,8 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
+const DUPLICATE_SCAN_LIMIT = 240;
+const DUPLICATE_SCAN_STATUSES = new Set(['PENDING', 'PROCESSING', 'SUCCESS']);
 
 const normalizeText = (raw: unknown) => (typeof raw === 'string' ? raw.trim() : '');
 
@@ -42,6 +44,46 @@ const resolveTaskTargetDate = (task: { user_data?: Record<string, any> | null })
   if (isDateOnly(customDate)) return customDate;
 
   return toShanghaiDateStr(normalizeText(userData.queuedAt || userData.queueAt || userData.submittedAt));
+};
+
+const resolveTaskUserId = (task: { user_data?: Record<string, any> | null }) => {
+  const userData = task.user_data || {};
+  return normalizeText(
+    userData.queueUserId
+    || userData.userId
+    || userData.session?.stuNumber
+    || userData.stuNumber,
+  );
+};
+
+const isStatementTimeoutError = (message: string) =>
+  /statement timeout|canceling statement due to statement timeout/i.test(message);
+
+const fetchRecentDuplicateCandidates = async (supabase: ReturnType<typeof getSupabaseAdminClient>) => {
+  const { data, error } = await supabase
+    .from('Tasks')
+    .select('id, status, user_data')
+    .order('id', { ascending: false })
+    .limit(DUPLICATE_SCAN_LIMIT);
+
+  if (error) {
+    if (isStatementTimeoutError(error.message || '')) {
+      console.warn('[submitTask] duplicate scan timed out, skip queue dedupe', error.message);
+      return { tasks: [] as Array<{ id: number; user_data?: Record<string, any> | null }>, error: null };
+    }
+    return { tasks: [] as Array<{ id: number; user_data?: Record<string, any> | null }>, error };
+  }
+
+  const tasks = Array.isArray(data)
+    ? data
+        .filter((task) => DUPLICATE_SCAN_STATUSES.has(normalizeText((task as Record<string, any>).status)))
+        .map((task) => ({
+          id: Number((task as Record<string, any>).id),
+          user_data: ((task as Record<string, any>).user_data ?? null) as Record<string, any> | null,
+        }))
+    : [];
+
+  return { tasks, error: null };
 };
 
 export default defineEventHandler(async (event) => {
@@ -87,6 +129,10 @@ export default defineEventHandler(async (event) => {
       ...userData,
       runMode: isBackfill ? 'backfill' : 'normal',
       targetDate,
+      queueTargetDate: targetDate,
+      queueUserId: stuNumber,
+      queueDayKey: `${stuNumber}:${targetDate}`,
+      queuedAt: normalizeText((userData as Record<string, any>).queuedAt) || new Date().toISOString(),
     };
 
     const history = await fetchSunRunHistory({
@@ -117,12 +163,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const supabase = getSupabaseAdminClient();
-    const { data: duplicateTasks, error: duplicateError } = await supabase
-      .from('Tasks')
-      .select('id, user_data')
-      .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-      .contains('user_data', { session: { stuNumber } });
-
+    const { tasks: duplicateTasks, error: duplicateError } = await fetchRecentDuplicateCandidates(supabase);
     if (duplicateError) {
       return new Response(
         JSON.stringify({ success: false, error: `重复任务检查失败: ${duplicateError.message}` }),
@@ -134,7 +175,8 @@ export default defineEventHandler(async (event) => {
     }
 
     const duplicated = Array.isArray(duplicateTasks)
-      && duplicateTasks.some((task) => resolveTaskTargetDate(task as any) === targetDate);
+      && duplicateTasks.some((task) =>
+        resolveTaskUserId(task as any) === stuNumber && resolveTaskTargetDate(task as any) === targetDate);
     if (duplicated) {
       return new Response(
         JSON.stringify({

@@ -407,28 +407,6 @@ const resolveTaskTargetDate = (task: TaskDateRow) => {
 
 const hasOfficialRecordOnDate = (targetDate: string) => completedDateSet.value.has(targetDate);
 
-const hasQueuedTaskOnDate = async (targetDate: string) => {
-  if (!supabaseEnabled.value || !supabase) return false;
-  if (!session.value?.stuNumber) return false;
-  const query = supabase
-    .from('Tasks')
-    .select('id, user_data')
-    .in('status', ['PENDING', 'PROCESSING', 'SUCCESS'])
-    .contains('user_data', { session: { stuNumber: session.value.stuNumber } });
-
-  const { data, error } = await query;
-  if (error) {
-    console.warn('[queue] duplicate check failed', error);
-    return false;
-  }
-  return Array.isArray(data) && data.some((task) => resolveTaskTargetDate(task as TaskDateRow) === targetDate);
-};
-
-const hasTaskOnDate = async (targetDate: string) => {
-  if (hasOfficialRecordOnDate(targetDate)) return true;
-  return hasQueuedTaskOnDate(targetDate);
-};
-
 const fetchCredits = async () => {
   if (!session.value?.stuNumber) return;
   loadingCredits.value = true;
@@ -631,23 +609,11 @@ const submitJobToQueue = async () => {
     return;
   }
 
-  const availableDates: string[] = [];
-  const duplicatedDates: string[] = [];
-  try {
-    for (const date of requestedDates) {
-      const duplicated = await hasTaskOnDate(date);
-      if (duplicated) duplicatedDates.push(date);
-      else availableDates.push(date);
-    }
-  } catch (dupErr) {
-    console.warn('[queue] duplicate check unexpected failure', dupErr);
-    statusMessage.value = '重复日期校验失败，请稍后重试';
-    isSubmitting.value = false;
-    return;
-  }
+  const duplicatedDates = requestedDates.filter((date) => hasOfficialRecordOnDate(date));
+  const availableDates = requestedDates.filter((date) => !hasOfficialRecordOnDate(date));
 
   if (!availableDates.length) {
-    statusMessage.value = '所选日期已存在记录或排队任务';
+    statusMessage.value = '所选日期已存在运动记录';
     isSubmitting.value = false;
     return;
   }
@@ -737,8 +703,8 @@ const submitJobToQueue = async () => {
 
   if (skippedCount > 0) {
     summary = summary
-      ? `${summary}，已跳过 ${skippedCount} 条已存在记录/队列的日期`
-      : `已跳过 ${skippedCount} 条已存在记录/队列的日期`;
+      ? `${summary}，已跳过 ${skippedCount} 条已有运动记录的日期`
+      : `已跳过 ${skippedCount} 条已有运动记录的日期`;
   }
 
   statusMessage.value = summary;
