@@ -26,6 +26,8 @@ const loadingRecords = ref(false);
 const recordMessage = ref('');
 const recordDialog = ref(false);
 const isSubmitting = ref(false);
+const paperLoading = ref(false);
+const initialLoadsStarted = ref(false);
 const statusMessage = ref('');
 const resultLog = ref('');
 const taskId = ref<number | null>(null);
@@ -545,6 +547,16 @@ const loadRunRecords = async () => {
   }
 };
 
+const kickOffInitialLoads = () => {
+  if (initialLoadsStarted.value) return;
+  initialLoadsStarted.value = true;
+  void loadRunRecords();
+  void fetchCredits();
+  if (supabaseEnabled.value && supabase) {
+    void refreshQueueEstimate();
+  }
+};
+
 const buildJobPayload = (
   targetDate: string | null,
   period: 'AM' | 'PM' | null,
@@ -725,6 +737,11 @@ const init = async () => {
     statusMessage.value = '请先登录';
     return;
   }
+  const hadCachedPaper = Array.isArray(routeList.value) && routeList.value.length > 0;
+  if (hadCachedPaper) {
+    kickOffInitialLoads();
+  }
+  paperLoading.value = true;
   try {
     const data = await TotoroApiWrapper.getSunRunPaper({
       token: session.value.token,
@@ -733,21 +750,20 @@ const init = async () => {
       stuNumber: session.value.stuNumber,
     });
     sunrunPaper.value = data;
-    selectValue.value = '';
-    await loadRunRecords();
-    await fetchCredits();
+    if (!routeList.value.some((routeItem: any) => routeItem.pointId === selectValue.value)) {
+      selectValue.value = '';
+    }
+    kickOffInitialLoads();
   } catch (error) {
     statusMessage.value = '获取路线失败';
     resultLog.value = (error as Error).message;
+  } finally {
+    paperLoading.value = false;
   }
 };
 
-await init();
-
 onMounted(() => {
-  if (supabaseEnabled.value && supabase) {
-    refreshQueueEstimate();
-  }
+  void init();
 });
 
 onUnmounted(() => {
@@ -780,6 +796,10 @@ onUnmounted(() => {
         </tbody>
       </VTable>
     </div>
+
+    <VAlert v-if="paperLoading && !routeList.length" type="info" variant="tonal">
+      正在加载路线、记录和次数，请稍候...
+    </VAlert>
 
     <div class="space-y-2">
       <div class="text-body-2 text-gray-600">路线</div>

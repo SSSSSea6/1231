@@ -7,14 +7,16 @@ import normalizeSession from '~/src/utils/normalizeSession';
 const route = useRoute();
 const router = useRouter();
 const redirect = computed(() => (route.query.redirect as string) || '/scanned');
-const { data, refresh, pending } = await useFetch<{ uuid: string; imgUrl: string }>(
-  '/api/scanQr',
-);
+const { data, refresh, pending } = useFetch<{ uuid: string; imgUrl: string }>('/api/scanQr', {
+  server: false,
+  default: () => ({ uuid: '', imgUrl: '' }),
+});
 const message = ref('');
 const snackbar = ref(false);
 const isLoading = ref(false);
 const schoolNoticeDialog = ref(false);
 const session = useSession();
+const sunrunPaper = useSunRunPaper();
 const NUAA_NAME = '南京航空航天大学';
 const NUAA_ALLOWED_CAMPUS_KEYWORDS = ['将军路', '天目湖', '明故宫'];
 
@@ -55,6 +57,16 @@ const fireAndForgetAppAd = (code: string) => {
   TotoroApiWrapper.getAppAd(code).catch((error) =>
     console.warn('[totoro-login] getAppAd failed', error),
   );
+};
+
+const prefetchSunRunPaper = (req: BasicRequest) => {
+  TotoroApiWrapper.getSunRunPaper(req)
+    .then((paper) => {
+      sunrunPaper.value = paper;
+    })
+    .catch((error) => {
+      console.warn('[totoro-prefetch] getSunRunPaper failed', error);
+    });
 };
 
 const syncPendingMorningTasks = async (userId: string, token: string) => {
@@ -108,7 +120,7 @@ const handleScanned = async () => {
       return;
     }
     session.value = normalized as any;
-    await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    sunrunPaper.value = {} as any;
 
     const breq: BasicRequest = {
       token: lesseeServer.token,
@@ -117,6 +129,8 @@ const handleScanned = async () => {
       stuNumber: personalInfo.stuNumber,
     };
 
+    void syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    prefetchSunRunPaper(breq);
     runPostLoginPrefetch(breq);
     await router.push(redirect.value);
   } catch (error) {

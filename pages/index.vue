@@ -5,15 +5,17 @@ import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
 import normalizeSession from '~/src/utils/normalizeSession';
 import poem from '~/src/data/poem.json';
 
-const { data, refresh, pending } = await useFetch<{ uuid: string; imgUrl: string }>(
-  '/api/scanQr',
-);
+const { data, refresh, pending } = useFetch<{ uuid: string; imgUrl: string }>('/api/scanQr', {
+  server: false,
+  default: () => ({ uuid: '', imgUrl: '' }),
+});
 const message = ref('');
 const snackbar = ref(false);
 const welcomeSnackbar = ref(true);
 const isLoading = ref(false);
 const schoolNoticeDialog = ref(false);
 const session = useSession();
+const sunrunPaper = useSunRunPaper();
 const mornSignNotice = '早操签到功能仍不完善，所有已购买的已退款';
 const MORNSIGN_PASSWORD = '982108244Qq';
 const MORNSIGN_MAX_ATTEMPTS = 4;
@@ -64,6 +66,16 @@ const fireAndForgetAppAd = (code: string) => {
   TotoroApiWrapper.getAppAd(code).catch((error) =>
     console.warn('[totoro-login] getAppAd failed', error),
   );
+};
+
+const prefetchSunRunPaper = (req: BasicRequest) => {
+  TotoroApiWrapper.getSunRunPaper(req)
+    .then((paper) => {
+      sunrunPaper.value = paper;
+    })
+    .catch((error) => {
+      console.warn('[totoro-prefetch] getSunRunPaper failed', error);
+    });
 };
 
 const syncPendingMorningTasks = async (userId: string, token: string) => {
@@ -122,7 +134,7 @@ const handleScanned = async () => {
       return;
     }
     session.value = normalized as any;
-    await syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    sunrunPaper.value = {} as any;
 
     const breq: BasicRequest = {
       token: lesseeServer.token,
@@ -130,6 +142,8 @@ const handleScanned = async () => {
       schoolId: personalInfo.schoolId,
       stuNumber: personalInfo.stuNumber,
     };
+    void syncPendingMorningTasks(personalInfo.stuNumber, lesseeServer.token);
+    prefetchSunRunPaper(breq);
     runPostLoginPrefetch(breq);
 
     message.value = '登录成功，可选择入口';
