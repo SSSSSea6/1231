@@ -980,7 +980,7 @@ onUnmounted(() => {
               size="small"
               variant="tonal"
               color="primary"
-              href="https://afdian.com/item/2bd8c944c9dc11f09f995254001e7c00"
+              href="https://ifdian.net/item/2bd8c944c9dc11f09f995254001e7c00"
               target="_blank"
             >
               获取 1 次
@@ -989,7 +989,7 @@ onUnmounted(() => {
               size="small"
               variant="tonal"
               color="primary"
-              href="https://afdian.com/item/bc3973fcc9dd11f0b56352540025c377"
+              href="https://ifdian.net/item/bc3973fcc9dd11f0b56352540025c377"
               target="_blank"
             >
               获取 5 次
@@ -998,7 +998,7 @@ onUnmounted(() => {
               size="small"
               variant="tonal"
               color="primary"
-              href="https://afdian.com/item/1953981ac9de11f0b69652540025c377"
+              href="https://ifdian.net/item/1953981ac9de11f0b69652540025c377"
               target="_blank"
             >
               获取 10 次
@@ -1007,7 +1007,7 @@ onUnmounted(() => {
               size="small"
               variant="tonal"
               color="primary"
-              href="https://afdian.com/item/be460538c9de11f0adee52540025c377"
+              href="https://ifdian.net/item/be460538c9de11f0adee52540025c377"
               target="_blank"
             >
               获取 20 次
@@ -1016,7 +1016,7 @@ onUnmounted(() => {
               size="small"
               variant="tonal"
               color="primary"
-              href="https://afdian.com/item/2f87de74c9df11f09c7c5254001e7c00"
+              href="https://ifdian.net/item/2f87de74c9df11f09c7c5254001e7c00"
               target="_blank"
             >
               获取 30 次
