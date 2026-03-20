@@ -14,6 +14,7 @@ const snackbar = ref(false);
 const welcomeSnackbar = ref(true);
 const isLoading = ref(false);
 const schoolNoticeDialog = ref(false);
+const nuaaGuideDialog = ref(false);
 const session = useSession();
 const sunrunPaper = useSunRunPaper();
 const mornSignNotice = '早操签到功能仍不完善，所有已购买的已退款';
@@ -34,6 +35,12 @@ const router = useRouter();
 const poemLines = useState('home-poem', () => poem[Math.floor(Math.random() * poem.length)]);
 const NUAA_NAME = '南京航空航天大学';
 const NUAA_ALLOWED_CAMPUS_KEYWORDS = ['将军路', '天目湖', '明故宫'];
+const NUAA_GUIDE_NOTICE_TITLE = '你好，NUAAer，微信小程序——NUAA Guide工具箱';
+const NUAA_GUIDE_NOTICE_LINES = [
+  '现已登录微信！',
+  '南航专属大学物理实验工具，只需拍照识别实验测得数据，即可自动完成实验数据处理（根据满分报告打造，数据保留均符合要求）、实验分析与讨论（AI根据实验数据专属生成）、图表生成。',
+  '欢迎大家支持使用！',
+];
 
 const shouldShowOtherSchoolNotice = (payload: Record<string, any>) => {
   const schoolName = String(payload?.schoolName ?? '').trim();
@@ -41,6 +48,17 @@ const shouldShowOtherSchoolNotice = (payload: Record<string, any>) => {
   const isNuaaBySchool = schoolName.includes(NUAA_NAME);
   const isNuaaByCampus = NUAA_ALLOWED_CAMPUS_KEYWORDS.some((keyword) => campusName.includes(keyword));
   return !(isNuaaBySchool || isNuaaByCampus);
+};
+
+const shouldShowNuaaGuideNotice = (payload: Record<string, any>) => {
+  const schoolName = String(payload?.schoolName ?? '').trim();
+  const campusName = String(payload?.campusName ?? '').trim();
+  return (
+    schoolName.includes(NUAA_NAME) ||
+    NUAA_ALLOWED_CAMPUS_KEYWORDS.some(
+      (keyword) => schoolName.includes(keyword) || campusName.includes(keyword),
+    )
+  );
 };
 
 const isKyHttpError = (error: unknown): error is HTTPError =>
@@ -135,6 +153,7 @@ const handleScanned = async () => {
     }
     session.value = normalized as any;
     sunrunPaper.value = {} as any;
+    nuaaGuideDialog.value = shouldShowNuaaGuideNotice(normalized as Record<string, any>);
 
     const breq: BasicRequest = {
       token: lesseeServer.token,
@@ -297,6 +316,17 @@ const goMornSign = () => {
     <div class="mt-4 text-center text-gray-700 font-bold text-xl whitespace-pre-line">
       {{ poemLines?.join('\n') }}
     </div>
+    <VDialog v-model="nuaaGuideDialog" max-width="560">
+      <VCard :title="NUAA_GUIDE_NOTICE_TITLE">
+        <VCardText class="leading-7 whitespace-pre-line">
+          {{ NUAA_GUIDE_NOTICE_LINES.join('\n') }}
+        </VCardText>
+        <VCardActions>
+          <VSpacer />
+          <VBtn color="primary" @click="nuaaGuideDialog = false">我知道了</VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
     <VDialog v-model="schoolNoticeDialog" max-width="520">
       <VCard title="提示">
         <VCardText class="leading-7">
