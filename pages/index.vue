@@ -17,10 +17,6 @@ const schoolNoticeDialog = ref(false);
 const nuaaGuideDialog = ref(false);
 const session = useSession();
 const sunrunPaper = useSunRunPaper();
-const mornSignNotice = '早操签到功能仍不完善，所有已购买的已退款';
-const MORNSIGN_PASSWORD = '982108244Qq';
-const MORNSIGN_MAX_ATTEMPTS = 4;
-const mornSignFailedAttempts = ref(0);
 
 const hydratedSession = computed(() => normalizeSession(session.value || {}));
 const isLoggedIn = computed(
@@ -237,41 +233,6 @@ const goFreeRun = () => {
   }
   router.push('/freerun');
 };
-
-const goMornSign = () => {
-  message.value = mornSignNotice;
-  snackbar.value = true;
-  if (typeof window !== 'undefined') {
-    window.alert(mornSignNotice);
-  }
-
-  if (!isLoggedIn.value) {
-    message.value = `${mornSignNotice}。请先扫码登录`;
-    snackbar.value = true;
-    return;
-  }
-
-  if (mornSignFailedAttempts.value >= MORNSIGN_MAX_ATTEMPTS) {
-    message.value = '密码错误次数过多，请稍后再试';
-    snackbar.value = true;
-    return;
-  }
-
-  const passwordInput = prompt('请输入早操签到访问密码');
-  if (passwordInput === null) return;
-
-  if (passwordInput !== MORNSIGN_PASSWORD) {
-    mornSignFailedAttempts.value += 1;
-    const remaining = MORNSIGN_MAX_ATTEMPTS - mornSignFailedAttempts.value;
-    message.value =
-      remaining > 0 ? `密码错误，还可再试${remaining}次` : '密码错误次数过多，请稍后再试';
-    snackbar.value = true;
-    return;
-  }
-
-  mornSignFailedAttempts.value = 0;
-  router.push('/mornsign');
-};
 </script>
 <template>
   <div class="flex flex-col items-center gap-4 py-10">
@@ -333,11 +294,6 @@ const goMornSign = () => {
           <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，外校同学请转向</span>
           <span class="font-bold text-orange-600">nuaaguide.icu</span>
           <span>以继续使用</span>
-          <div class="mt-2">
-            <span>具体请咨询QQ </span>
-            <span class="font-bold text-orange-600">1538213150</span>
-            <span>（沐缘）</span>
-          </div>
         </VCardText>
         <VCardActions>
           <VSpacer />

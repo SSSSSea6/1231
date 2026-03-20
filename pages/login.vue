@@ -6,7 +6,10 @@ import normalizeSession from '~/src/utils/normalizeSession';
 
 const route = useRoute();
 const router = useRouter();
-const redirect = computed(() => (route.query.redirect as string) || '/scanned');
+const redirect = computed(() => {
+  const next = String(route.query.redirect ?? '').trim();
+  return !next || next === '/mornsign' ? '/scanned' : next;
+});
 const { data, refresh, pending } = useFetch<{ uuid: string; imgUrl: string }>('/api/scanQr', {
   server: false,
   default: () => ({ uuid: '', imgUrl: '' }),
@@ -229,11 +232,6 @@ const closeNuaaGuideNotice = async () => {
           <span>同学你好，由于使用人数较多，南航同学使用体验不能保证，外校同学请转向</span>
           <span class="font-bold text-orange-600">nuaaguide.icu</span>
           <span>以继续使用</span>
-          <div class="mt-2">
-            <span>具体请咨询QQ </span>
-            <span class="font-bold text-orange-600">1538213150</span>
-            <span>（沐缘）</span>
-          </div>
         </VCardText>
         <VCardActions>
           <VSpacer />
