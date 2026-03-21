@@ -4,6 +4,7 @@ import type { SunRunRecord } from '~/src/types/responseTypes/SunRunSportResponse
 import { supabase, supabaseReady } from '~/src/services/supabaseClient';
 import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
 import normalizeSession from '~/src/utils/normalizeSession';
+import { getAutoRouteRule, pickAutoRouteName } from '~/src/utils/autoRouteSelection';
 
 const sunrunPaper = useSunRunPaper();
 const session = useSession();
@@ -35,6 +36,7 @@ const realtimeChannel = ref<RealtimeChannel | null>(null);
 const queueCount = ref<number | null>(null);
 const estimatedWaitMs = ref<number | null>(null);
 const isQueueLoading = ref(false);
+const autoRouteName = ref('');
 const routeSelected = computed(() => Boolean(selectValue.value));
 const selectedDates = computed(() => Array.from(new Set(customDates.value)).sort());
 const pickRandomPeriod = (): 'AM' | 'PM' => (Math.random() < 0.5 ? 'AM' : 'PM');
@@ -49,6 +51,8 @@ type TaskDateRow = {
 };
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
+const autoRouteRule = computed(() => getAutoRouteRule(hydratedSession.value));
+const isAutoRouteLocked = computed(() => Boolean(autoRouteRule.value));
 const target = computed(() =>
   sunrunPaper.value?.runPointList?.find((r: any) => r.pointId === selectValue.value),
 );
@@ -342,6 +346,32 @@ const randomSelect = () => {
   if (!list.length) return;
   const idx = Math.floor(Math.random() * list.length);
   selectValue.value = list[idx]!.pointId;
+};
+
+const applyAutoSunRunRouteSelection = () => {
+  const rule = autoRouteRule.value;
+  if (!rule) {
+    autoRouteName.value = '';
+    return false;
+  }
+
+  const routeCandidates = routeList.value.filter((routeItem: any) =>
+    rule.sunRunRouteNames.includes(routeItem.pointName),
+  );
+  if (!routeCandidates.length) return false;
+
+  const candidateNames = routeCandidates.map((routeItem: any) => routeItem.pointName);
+  if (!autoRouteName.value || !candidateNames.includes(autoRouteName.value)) {
+    autoRouteName.value = pickAutoRouteName(candidateNames);
+  }
+
+  const selectedRoute = routeCandidates.find((routeItem: any) => routeItem.pointName === autoRouteName.value);
+  if (selectedRoute) {
+    selectValue.value = selectedRoute.pointId;
+    return true;
+  }
+
+  return false;
 };
 
 const selectDay = (iso: string, disabled: boolean) => {
@@ -750,7 +780,7 @@ const init = async () => {
       stuNumber: session.value.stuNumber,
     });
     sunrunPaper.value = data;
-    if (!routeList.value.some((routeItem: any) => routeItem.pointId === selectValue.value)) {
+    if (!applyAutoSunRunRouteSelection() && !routeList.value.some((routeItem: any) => routeItem.pointId === selectValue.value)) {
       selectValue.value = '';
     }
     kickOffInitialLoads();
@@ -769,6 +799,18 @@ onMounted(() => {
 onUnmounted(() => {
   cleanupRealtime();
 });
+
+watch(
+  () =>
+    `${hydratedSession.value?.schoolId || ''}|${hydratedSession.value?.campusId || ''}|${hydratedSession.value?.campusName || ''}`,
+  () => {
+    autoRouteName.value = '';
+    void nextTick(() => {
+      applyAutoSunRunRouteSelection();
+    });
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
@@ -803,7 +845,13 @@ onUnmounted(() => {
 
     <div class="space-y-2">
       <div class="text-body-2 text-gray-600">路线</div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <VCard v-if="isAutoRouteLocked" variant="tonal" class="p-4">
+        <div class="text-sm text-gray-500">已根据学校/校区自动随机选择路线</div>
+        <div class="mt-1 text-lg font-semibold text-gray-800">
+          {{ target?.pointName || autoRouteName || '自动选择中...' }}
+        </div>
+      </VCard>
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <VBtn
           v-for="routeItem in routeList"
           :key="routeItem.pointId"
@@ -1058,7 +1106,7 @@ onUnmounted(() => {
 
     <div v-if="sunrunPaper?.runPointList?.length" class="h-50vh w-full md:w-50vw">
       <ClientOnly>
-        <AMap :target="selectValue" @update:target="selectValue = $event" />
+        <AMap :target="selectValue" :locked="isAutoRouteLocked" @update:target="selectValue = $event" />
       </ClientOnly>
     </div>
   </div>

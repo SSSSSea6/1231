@@ -2,6 +2,7 @@
 import normalizeSession from '~/src/utils/normalizeSession';
 import freeRunRoutes from '~/src/data/freeRunRoutes';
 import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
+import { getAutoRouteRule, pickAutoRouteName } from '~/src/utils/autoRouteSelection';
 
 type RunResponse = { success?: boolean; message?: string; scantronId?: string; routeDistanceKm?: number };
 type CreditsResponse = { success?: boolean; credits?: number; records?: any[]; message?: string };
@@ -23,15 +24,46 @@ const redeemCode = ref('');
 const redeemLinksDialog = ref(false);
 
 const isLoggedIn = computed(() => Boolean(hydratedSession.value?.token));
+const autoRouteRule = computed(() => getAutoRouteRule(hydratedSession.value));
+const autoRouteName = ref('');
+const isAutoRouteLocked = computed(() => Boolean(autoRouteRule.value));
 const displayStuNumber = computed(() => hydratedSession.value?.stuNumber || '-');
 const displayStuName = computed(() => hydratedSession.value?.stuName || '-');
 const displaySchool = computed(
   () => `${hydratedSession.value?.schoolName || '-'} ${hydratedSession.value?.campusName || ''}`.trim(),
 );
+const selectedRouteLabel = computed(
+  () => freeRunRoutes.find((route) => route.id === selectedRouteId.value)?.name || autoRouteName.value || '-',
+);
 
 const notify = (msg: string) => {
   snackbarMessage.value = msg;
   snackbar.value = true;
+};
+
+const applyAutoRouteSelection = () => {
+  const rule = autoRouteRule.value;
+  if (!rule) {
+    autoRouteName.value = '';
+    if (!selectedRouteId.value) {
+      selectedRouteId.value = freeRunRoutes[0]?.id || '';
+    }
+    return;
+  }
+
+  const candidateNames = rule.freeRunRouteNames.filter((name) =>
+    freeRunRoutes.some((route) => route.name === name),
+  );
+  if (!candidateNames.length) return;
+
+  if (!autoRouteName.value || !candidateNames.includes(autoRouteName.value)) {
+    autoRouteName.value = pickAutoRouteName(candidateNames);
+  }
+
+  const route = freeRunRoutes.find((item) => item.name === autoRouteName.value);
+  if (route) {
+    selectedRouteId.value = route.id;
+  }
 };
 
 const hydrateSession = async () => {
@@ -145,9 +177,20 @@ onMounted(() => {
     return;
   }
   session.value = normalizeSession(localStorage.getItem('totoroSession') || session.value || {});
+  applyAutoRouteSelection();
   hydrateSession();
   fetchCredits();
 });
+
+watch(
+  () =>
+    `${hydratedSession.value?.schoolId || ''}|${hydratedSession.value?.campusId || ''}|${hydratedSession.value?.campusName || ''}`,
+  () => {
+    autoRouteName.value = '';
+    applyAutoRouteSelection();
+  },
+  { immediate: true },
+);
 
 watch(
   () => hydratedSession.value?.token,
@@ -156,6 +199,7 @@ watch(
       router.push('/login?redirect=/freerun');
       return;
     }
+    applyAutoRouteSelection();
     hydrateSession();
     fetchCredits();
   },
@@ -222,7 +266,17 @@ watch(
           />
         </VCol>
         <VCol cols="12" md="6">
+          <VTextField
+            v-if="isAutoRouteLocked"
+            :model-value="selectedRouteLabel"
+            label="预设路线"
+            variant="outlined"
+            readonly
+            hint="已根据学校/校区自动随机选择路线"
+            persistent-hint
+          />
           <VSelect
+            v-else
             v-model="selectedRouteId"
             :items="freeRunRoutes.map((r) => ({ title: r.name, value: r.id, subtitle: r.description }))"
             label="选择预设路线"
