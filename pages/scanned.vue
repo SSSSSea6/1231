@@ -52,7 +52,6 @@ type TaskDateRow = {
 
 const supabaseEnabled = computed(() => supabaseReady && Boolean(supabase));
 const autoRouteRule = computed(() => getAutoRouteRule(hydratedSession.value));
-const isAutoRouteLocked = computed(() => Boolean(autoRouteRule.value));
 const target = computed(() =>
   sunrunPaper.value?.runPointList?.find((r: any) => r.pointId === selectValue.value),
 );
@@ -845,13 +844,16 @@ watch(
 
     <div class="space-y-2">
       <div class="text-body-2 text-gray-600">路线</div>
-      <VCard v-if="isAutoRouteLocked" variant="tonal" class="p-4">
+      <VCard v-if="autoRouteRule" variant="tonal" class="p-4">
         <div class="text-sm text-gray-500">已根据学校/校区自动随机选择路线</div>
         <div class="mt-1 text-lg font-semibold text-gray-800">
           {{ target?.pointName || autoRouteName || '自动选择中...' }}
         </div>
+        <div class="mt-2 text-sm text-gray-600">
+          已根据学校和校区自动选择路线，仍可手动修改
+        </div>
       </VCard>
-      <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <VBtn
           v-for="routeItem in routeList"
           :key="routeItem.pointId"
@@ -1106,7 +1108,7 @@ watch(
 
     <div v-if="sunrunPaper?.runPointList?.length" class="h-50vh w-full md:w-50vw">
       <ClientOnly>
-        <AMap :target="selectValue" :locked="isAutoRouteLocked" @update:target="selectValue = $event" />
+        <AMap :target="selectValue" @update:target="selectValue = $event" />
       </ClientOnly>
     </div>
   </div>

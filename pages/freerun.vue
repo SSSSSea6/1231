@@ -26,15 +26,12 @@ const redeemLinksDialog = ref(false);
 const isLoggedIn = computed(() => Boolean(hydratedSession.value?.token));
 const autoRouteRule = computed(() => getAutoRouteRule(hydratedSession.value));
 const autoRouteName = ref('');
-const isAutoRouteLocked = computed(() => Boolean(autoRouteRule.value));
 const displayStuNumber = computed(() => hydratedSession.value?.stuNumber || '-');
 const displayStuName = computed(() => hydratedSession.value?.stuName || '-');
 const displaySchool = computed(
   () => `${hydratedSession.value?.schoolName || '-'} ${hydratedSession.value?.campusName || ''}`.trim(),
 );
-const selectedRouteLabel = computed(
-  () => freeRunRoutes.find((route) => route.id === selectedRouteId.value)?.name || autoRouteName.value || '-',
-);
+const showAutoRouteNotice = computed(() => Boolean(autoRouteRule.value));
 
 const notify = (msg: string) => {
   snackbarMessage.value = msg;
@@ -266,21 +263,13 @@ watch(
           />
         </VCol>
         <VCol cols="12" md="6">
-          <VTextField
-            v-if="isAutoRouteLocked"
-            :model-value="selectedRouteLabel"
-            label="预设路线"
-            variant="outlined"
-            readonly
-            hint="已根据学校/校区自动随机选择路线"
-            persistent-hint
-          />
           <VSelect
-            v-else
             v-model="selectedRouteId"
             :items="freeRunRoutes.map((r) => ({ title: r.name, value: r.id, subtitle: r.description }))"
             label="选择预设路线"
             variant="outlined"
+            :hint="showAutoRouteNotice ? '已根据学校和校区自动选择路线，仍可手动修改' : undefined"
+            :persistent-hint="showAutoRouteNotice"
           />
         </VCol>
       </VRow>
