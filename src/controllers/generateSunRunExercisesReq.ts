@@ -1,7 +1,14 @@
 import { format, intervalToDuration } from 'date-fns';
 import type SunRunExercisesRequest from '../types/requestTypes/SunRunExercisesRequest';
 import generateMac from '../utils/generateMac';
-import normalRandom from '../utils/normalRandom';
+import {
+  SUNRUN_DURATION_JITTER_SECONDS,
+  clampSunRunDurationSeconds,
+  getSunRunDurationBounds,
+  normalizeSunRunDurationSeconds,
+  pickRandomReasonableSunRunDurationSeconds,
+  pickSunRunDurationAroundBaseSeconds,
+} from '../utils/sunrunDuration';
 import timeUtil from '../utils/timeUtil';
 
 const BEIJING_OFFSET_MINUTES = 8 * 60;
@@ -29,21 +36,20 @@ const parseCustomEndTime = (customEndTime?: string | Date) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-/**
- * @param minTime minimum duration in minutes
- * @param maxTime maximum duration in minutes
- */
 const generateRunReq = async ({
   distance,
   routeId,
   taskId,
   token,
-  schoolId,
+  schoolId: _schoolId,
   stuNumber,
   phoneNumber,
   minTime,
   maxTime,
   customEndTime,
+  requestedDurationSeconds,
+  durationPreferenceBaseSeconds,
+  durationJitterSeconds,
 }: {
   distance: string;
   routeId: string;
@@ -55,15 +61,22 @@ const generateRunReq = async ({
   minTime: string;
   maxTime: string;
   customEndTime?: string | Date;
+  requestedDurationSeconds?: number | null;
+  durationPreferenceBaseSeconds?: number | null;
+  durationJitterSeconds?: number | null;
 }) => {
-  const { minSecond, maxSecond } = {
-    minSecond: Number(minTime) * 60,
-    maxSecond: Number(maxTime) * 60,
-  };
-  const avgSecond = minSecond + maxSecond / 2;
-  const waitSecond = Math.floor(
-    normalRandom(minSecond + maxSecond / 2, (maxSecond - avgSecond) / 3),
-  );
+  const bounds = getSunRunDurationBounds(minTime, maxTime);
+  const requestedSeconds = normalizeSunRunDurationSeconds(requestedDurationSeconds);
+  const baseSeconds = normalizeSunRunDurationSeconds(durationPreferenceBaseSeconds);
+  const safeJitterSeconds =
+    normalizeSunRunDurationSeconds(durationJitterSeconds) ?? SUNRUN_DURATION_JITTER_SECONDS;
+  const waitSecond = requestedSeconds != null && bounds
+    ? clampSunRunDurationSeconds(requestedSeconds, bounds)
+    : baseSeconds != null && bounds
+      ? pickSunRunDurationAroundBaseSeconds(baseSeconds, bounds, safeJitterSeconds)
+      : bounds
+        ? pickRandomReasonableSunRunDurationSeconds(bounds)
+        : Math.max(1, Math.round((Number(minTime) || Number(maxTime) || 1) * 60));
 
   const diffMs = offsetDiffMs();
   const now = new Date();
@@ -85,7 +98,18 @@ const generateRunReq = async ({
   const adjustedDistanceNum = originalDistanceNum + randomIncrement;
   const adjustedDistance = adjustedDistanceNum.toFixed(2);
 
-  const avgSpeed = (adjustedDistanceNum / (waitSecond / 3600)).toFixed(2);
+  const avgSpeedNum = adjustedDistanceNum / (waitSecond / 3600);
+  const avgSpeed = avgSpeedNum.toFixed(2);
+  const speedRatio = Math.max(0, Math.min(1, (avgSpeedNum - 6) / 6));
+  const strideMeters = Math.max(0.68, Math.min(1.02, 0.72 + speedRatio * 0.18 + (Math.random() * 0.08 - 0.04)));
+  const adjustedDistanceMeters = adjustedDistanceNum * 1000;
+  let steps = Math.round(adjustedDistanceMeters / strideMeters);
+  const cadence = steps / (waitSecond / 60);
+  if (cadence < 120) {
+    steps = Math.round(120 * (waitSecond / 60));
+  } else if (cadence > 200) {
+    steps = Math.round(200 * (waitSecond / 60));
+  }
   const duration = intervalToDuration({ start: localStart, end: localEnd });
   const mac = await generateMac(stuNumber);
   const req: SunRunExercisesRequest = {
@@ -101,13 +125,13 @@ const generateRunReq = async ({
     km: adjustedDistance,
     mac,
     phoneInfo: '$CN11/iPhone15,4/17.4.1',
-    phoneNumber: '',
+    phoneNumber: phoneNumber || '',
     pointList: '',
     routeId,
     runType: '0',
     sensorString: '',
     startTime: format(localStart, 'HH:mm:ss'),
-    steps: `${1000 + Math.floor(Math.random() * 1000)}`,
+    steps: `${steps}`,
     stuNumber,
     taskId,
     token,

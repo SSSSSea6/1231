@@ -5,6 +5,14 @@ import { supabase, supabaseReady } from '~/src/services/supabaseClient';
 import TotoroApiWrapper from '~/src/wrappers/TotoroApiWrapper';
 import normalizeSession from '~/src/utils/normalizeSession';
 import { getAutoRouteRule, pickAutoRouteName } from '~/src/utils/autoRouteSelection';
+import {
+  SUNRUN_DURATION_JITTER_SECONDS,
+  clampSunRunDurationSeconds,
+  formatSunRunDurationSeconds,
+  getSunRunDurationBounds,
+  pickRandomReasonableSunRunDurationSeconds,
+  pickSunRunDurationAroundBaseSeconds,
+} from '~/src/utils/sunrunDuration';
 
 const sunrunPaper = useSunRunPaper();
 const session = useSession();
@@ -37,6 +45,11 @@ const queueCount = ref<number | null>(null);
 const estimatedWaitMs = ref<number | null>(null);
 const isQueueLoading = ref(false);
 const autoRouteName = ref('');
+const customDurationEnabled = ref(false);
+const savedDurationBaseSeconds = ref<number | null>(null);
+const plannedDurationSeconds = ref<number | null>(null);
+const customDurationSeconds = ref<number | null>(null);
+const durationPreferenceLoading = ref(false);
 const routeSelected = computed(() => Boolean(selectValue.value));
 const selectedDates = computed(() => Array.from(new Set(customDates.value)).sort());
 const pickRandomPeriod = (): 'AM' | 'PM' => (Math.random() < 0.5 ? 'AM' : 'PM');
@@ -56,6 +69,25 @@ const target = computed(() =>
   sunrunPaper.value?.runPointList?.find((r: any) => r.pointId === selectValue.value),
 );
 const routeList = computed(() => sunrunPaper.value?.runPointList || []);
+const durationBounds = computed(() =>
+  getSunRunDurationBounds(sunrunPaper.value?.minTime, sunrunPaper.value?.maxTime),
+);
+const hasSavedDurationPreference = computed(() => Number.isFinite(savedDurationBaseSeconds.value));
+const currentDurationSeconds = computed(() =>
+  customDurationEnabled.value
+    ? customDurationSeconds.value
+    : plannedDurationSeconds.value,
+);
+const currentDurationLabel = computed(() =>
+  formatSunRunDurationSeconds(currentDurationSeconds.value),
+);
+const savedDurationLabel = computed(() =>
+  formatSunRunDurationSeconds(savedDurationBaseSeconds.value),
+);
+const durationStorageKey = computed(() => {
+  const userId = String(hydratedSession.value?.stuNumber || session.value?.stuNumber || '').trim();
+  return userId ? `sunrun-duration-preference:${userId}` : '';
+});
 const completedDateSet = computed(() => new Set(completedDates.value));
 const formatDateOnly = (date: Date) => {
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -347,6 +379,172 @@ const randomSelect = () => {
   selectValue.value = list[idx]!.pointId;
 };
 
+const readLocalDurationPreference = () => {
+  if (typeof window === 'undefined' || !durationStorageKey.value) return null;
+  const raw = window.localStorage.getItem(durationStorageKey.value);
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
+};
+
+const writeLocalDurationPreference = (seconds: number | null) => {
+  if (typeof window === 'undefined' || !durationStorageKey.value) return;
+  if (!seconds) {
+    window.localStorage.removeItem(durationStorageKey.value);
+    return;
+  }
+  window.localStorage.setItem(durationStorageKey.value, String(Math.round(seconds)));
+};
+
+const refreshPlannedDuration = () => {
+  const bounds = durationBounds.value;
+  if (!bounds) {
+    plannedDurationSeconds.value = null;
+    customDurationSeconds.value = null;
+    return;
+  }
+
+  if (savedDurationBaseSeconds.value != null) {
+    plannedDurationSeconds.value = pickSunRunDurationAroundBaseSeconds(
+      savedDurationBaseSeconds.value,
+      bounds,
+      SUNRUN_DURATION_JITTER_SECONDS,
+    );
+  } else {
+    plannedDurationSeconds.value = pickRandomReasonableSunRunDurationSeconds(bounds);
+  }
+
+  if (!customDurationEnabled.value) {
+    customDurationSeconds.value = savedDurationBaseSeconds.value != null
+      ? clampSunRunDurationSeconds(savedDurationBaseSeconds.value, bounds)
+      : plannedDurationSeconds.value;
+  }
+};
+
+const fetchDurationPreference = async () => {
+  const userId = String(hydratedSession.value?.stuNumber || session.value?.stuNumber || '').trim();
+  if (!userId) return;
+
+  const localValue = readLocalDurationPreference();
+  savedDurationBaseSeconds.value = localValue;
+  refreshPlannedDuration();
+
+  durationPreferenceLoading.value = true;
+  try {
+    const res = await $fetch<{
+      success?: boolean;
+      preferredDurationSeconds?: number | null;
+      message?: string;
+      code?: string;
+    }>('/api/run/durationPreference', {
+      method: 'POST',
+      body: { action: 'get', userId },
+    });
+
+    if (res.success && Number.isFinite(res.preferredDurationSeconds) && Number(res.preferredDurationSeconds) > 0) {
+      savedDurationBaseSeconds.value = Math.round(Number(res.preferredDurationSeconds));
+      writeLocalDurationPreference(savedDurationBaseSeconds.value);
+      refreshPlannedDuration();
+      return;
+    }
+
+    if (res.success && (res.preferredDurationSeconds == null || res.preferredDurationSeconds === 0)) {
+      savedDurationBaseSeconds.value = localValue;
+      refreshPlannedDuration();
+      return;
+    }
+
+    console.warn('[duration-pref] fetch failed', res.message || res.code || 'unknown');
+  } catch (error) {
+    console.warn('[duration-pref] fetch failed', error);
+  } finally {
+    durationPreferenceLoading.value = false;
+  }
+};
+
+const saveDurationPreference = async (seconds: number) => {
+  const userId = String(hydratedSession.value?.stuNumber || session.value?.stuNumber || '').trim();
+  if (!userId) return false;
+
+  writeLocalDurationPreference(seconds);
+  savedDurationBaseSeconds.value = seconds;
+
+  try {
+    const res = await $fetch<{
+      success?: boolean;
+      preferredDurationSeconds?: number | null;
+      message?: string;
+      code?: string;
+    }>('/api/run/durationPreference', {
+      method: 'POST',
+      body: { action: 'set', userId, preferredDurationSeconds: seconds },
+    });
+
+    if (!res.success) {
+      console.warn('[duration-pref] save failed', res.message || res.code || 'unknown');
+      return false;
+    }
+
+    if (Number.isFinite(res.preferredDurationSeconds) && Number(res.preferredDurationSeconds) > 0) {
+      savedDurationBaseSeconds.value = Math.round(Number(res.preferredDurationSeconds));
+      writeLocalDurationPreference(savedDurationBaseSeconds.value);
+    }
+    return true;
+  } catch (error) {
+    console.warn('[duration-pref] save failed', error);
+    return false;
+  }
+};
+
+const resolveDurationPlanForSubmit = ({ useDisplayedWhenAvailable = true } = {}) => {
+  const bounds = durationBounds.value;
+  if (!bounds) {
+    return {
+      actualDurationSeconds: null as number | null,
+      baseDurationSeconds: null as number | null,
+      durationMode: 'random' as 'random' | 'preference' | 'custom',
+      shouldPersistPreference: false,
+    };
+  }
+
+  if (customDurationEnabled.value && customDurationSeconds.value != null) {
+    const exact = clampSunRunDurationSeconds(customDurationSeconds.value, bounds);
+    return {
+      actualDurationSeconds: exact,
+      baseDurationSeconds: exact,
+      durationMode: 'custom' as const,
+      shouldPersistPreference: true,
+    };
+  }
+
+  if (savedDurationBaseSeconds.value != null) {
+    const actual = useDisplayedWhenAvailable && plannedDurationSeconds.value != null
+      ? clampSunRunDurationSeconds(plannedDurationSeconds.value, bounds)
+      : pickSunRunDurationAroundBaseSeconds(
+        savedDurationBaseSeconds.value,
+        bounds,
+        SUNRUN_DURATION_JITTER_SECONDS,
+      );
+    plannedDurationSeconds.value = actual;
+    return {
+      actualDurationSeconds: actual,
+      baseDurationSeconds: clampSunRunDurationSeconds(savedDurationBaseSeconds.value, bounds),
+      durationMode: 'preference' as const,
+      shouldPersistPreference: false,
+    };
+  }
+
+  const actual = useDisplayedWhenAvailable && plannedDurationSeconds.value != null
+    ? clampSunRunDurationSeconds(plannedDurationSeconds.value, bounds)
+    : pickRandomReasonableSunRunDurationSeconds(bounds);
+  plannedDurationSeconds.value = actual;
+  return {
+    actualDurationSeconds: actual,
+    baseDurationSeconds: null,
+    durationMode: 'random' as const,
+    shouldPersistPreference: false,
+  };
+};
+
 const applyAutoSunRunRouteSelection = () => {
   const rule = autoRouteRule.value;
   if (!rule) {
@@ -590,6 +788,7 @@ const buildJobPayload = (
   targetDate: string | null,
   period: 'AM' | 'PM' | null,
   reservedCredit = false,
+  durationPlan = resolveDurationPlanForSubmit(),
 ) => {
   if (!target.value) throw new Error('未选择路线');
   return {
@@ -616,6 +815,12 @@ const buildJobPayload = (
     reservedCreditCount: reservedCredit ? 1 : 0,
     creditRefunded: false,
     creditRefundPending: false,
+    requestedDurationSeconds: durationPlan.actualDurationSeconds,
+    durationPreferenceBaseSeconds: durationPlan.baseDurationSeconds,
+    durationJitterSeconds:
+      durationPlan.durationMode === 'preference' ? SUNRUN_DURATION_JITTER_SECONDS : 0,
+    durationMode: durationPlan.durationMode,
+    customDurationSelected: durationPlan.durationMode === 'custom',
     queuedAt: new Date().toISOString(),
   };
 };
@@ -661,6 +866,8 @@ const submitJobToQueue = async () => {
 
   let reservedCredit = false;
   let reserveNeedsRefund = false;
+  let lastSuccessfulDurationPlan: ReturnType<typeof resolveDurationPlanForSubmit> | null = null;
+  let useDisplayedDurationPlan = true;
 
   if (isBackfill && session.value?.stuNumber) {
     const reserveResult = await reserveBackfillCredit(availableDates.length);
@@ -682,7 +889,11 @@ const submitJobToQueue = async () => {
   for (const date of availableDates) {
     try {
       const period = isBackfill ? pickRandomPeriod() : null;
-      const jobPayload = buildJobPayload(date, period, reservedCredit);
+      const durationPlan = resolveDurationPlanForSubmit({
+        useDisplayedWhenAvailable: useDisplayedDurationPlan,
+      });
+      useDisplayedDurationPlan = false;
+      const jobPayload = buildJobPayload(date, period, reservedCredit, durationPlan);
       const response = await fetch('/api/submitTask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -691,6 +902,7 @@ const submitJobToQueue = async () => {
       const data = await response.json();
       if (response.status === 202 && data.success) {
         successTaskIds.push(data.taskId);
+        lastSuccessfulDurationPlan = durationPlan;
       } else {
         failedDates.push(date);
         const reason =
@@ -756,6 +968,15 @@ const submitJobToQueue = async () => {
 
   submitted.value = successCount > 0;
   isSubmitting.value = false;
+  if (
+    successCount > 0
+    && lastSuccessfulDurationPlan?.shouldPersistPreference
+    && lastSuccessfulDurationPlan.baseDurationSeconds != null
+  ) {
+    await saveDurationPreference(lastSuccessfulDurationPlan.baseDurationSeconds);
+    customDurationEnabled.value = false;
+  }
+  refreshPlannedDuration();
   if (reservedCredit) {
     await fetchCredits();
   }
@@ -798,6 +1019,59 @@ onMounted(() => {
 onUnmounted(() => {
   cleanupRealtime();
 });
+
+watch(
+  durationStorageKey,
+  () => {
+    if (!durationStorageKey.value) {
+      savedDurationBaseSeconds.value = null;
+      plannedDurationSeconds.value = null;
+      customDurationSeconds.value = null;
+      return;
+    }
+    void fetchDurationPreference();
+  },
+  { immediate: true },
+);
+
+watch(
+  durationBounds,
+  () => {
+    refreshPlannedDuration();
+  },
+  { immediate: true },
+);
+
+watch(
+  customDurationEnabled,
+  (enabled) => {
+    const bounds = durationBounds.value;
+    if (!bounds) {
+      customDurationEnabled.value = false;
+      customDurationSeconds.value = null;
+      return;
+    }
+
+    if (enabled) {
+      customDurationSeconds.value = clampSunRunDurationSeconds(
+        savedDurationBaseSeconds.value
+        ?? plannedDurationSeconds.value
+        ?? pickRandomReasonableSunRunDurationSeconds(bounds),
+        bounds,
+      );
+      return;
+    }
+
+    refreshPlannedDuration();
+  },
+);
+
+watch(
+  savedDurationBaseSeconds,
+  () => {
+    refreshPlannedDuration();
+  },
+);
 
 watch(
   () =>
@@ -888,6 +1162,50 @@ watch(
         <VRadio label="立即开跑" :value="false" />
         <VRadio label="选择日期（可多选，仅本学期）" :value="true" />
       </VRadioGroup>
+      <VCard class="max-w-2xl p-4 space-y-3" variant="outlined">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div class="font-medium">跑步时长</div>
+            <div class="text-sm text-gray-600">
+              本次预计用时：<span class="font-semibold text-primary">{{ currentDurationLabel }}</span>
+            </div>
+            <div v-if="hasSavedDurationPreference" class="text-sm text-gray-600">
+              已保存基准时长：<span class="font-semibold">{{ savedDurationLabel }}</span>
+            </div>
+            <div class="text-caption text-gray-500">
+              未勾选时会使用系统自动时长；如果你之前保存过时长，会在该基准上上下偏移 20 秒。
+            </div>
+          </div>
+          <VCheckbox
+            v-model="customDurationEnabled"
+            label="自定义时长"
+            hide-details
+            color="primary"
+            :disabled="!durationBounds"
+          />
+        </div>
+        <VSlider
+          v-model="customDurationSeconds"
+          :min="durationBounds?.minSeconds ?? 0"
+          :max="durationBounds?.maxSeconds ?? 0"
+          :step="1"
+          color="primary"
+          track-color="orange-lighten-4"
+          thumb-label
+          :disabled="!customDurationEnabled || !durationBounds"
+        >
+          <template #append>
+            <div class="min-w-20 text-right text-sm font-medium">
+              {{ formatSunRunDurationSeconds(customDurationSeconds) }}
+            </div>
+          </template>
+        </VSlider>
+        <div class="flex flex-wrap gap-4 text-caption text-gray-500">
+          <div>下限：{{ formatSunRunDurationSeconds(durationBounds?.minSeconds) }}</div>
+          <div>上限：{{ formatSunRunDurationSeconds(durationBounds?.maxSeconds) }}</div>
+          <div v-if="durationPreferenceLoading">正在读取已保存时长...</div>
+        </div>
+      </VCard>
       <div v-if="showBackfill" class="space-y-3">
         <VCard class="p-3 space-y-2" variant="tonal">
           <div class="flex items-center gap-3">
